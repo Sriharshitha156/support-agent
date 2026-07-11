@@ -9,14 +9,17 @@ Flow: Request -> Preprocess -> Planner -> [Human Gate | Tool Executor]
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
+from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState
 from app.governance.audit import log_event
@@ -181,6 +184,38 @@ def _normalize_approval_decision(raw_decision: object) -> str:
 
 
 # ---------------------------------------------------------------------------
+# LLM Orchestration & Fallback Helper
+# ---------------------------------------------------------------------------
+
+
+class RiskScan(BaseModel):
+    legal_threat: bool = Field(description="True if customer mentions legal action, sue, lawyers, or formal legal complaints.")
+    detected_keywords: list[str] = Field(description="Specific risk or legal keywords found in the text.")
+    refund_requested: bool = Field(description="True if the customer is requesting a refund, return, or compensation.")
+
+
+class AnalysisPlan(BaseModel):
+    intent: str = Field(description="One of: 'order_status', 'refund', 'general', or 'out_of_scope'.")
+    order_id: str = Field(description="Extracted order ID (e.g. ORD-1001 or A4821) or empty string.")
+    refund_amount: float = Field(description="Extracted refund amount (in USD) or 0.0.")
+
+
+def _get_llm() -> ChatOpenAI | None:
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key and not openai_key.startswith("sk-your-openai-api-key"):
+        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        try:
+            # We set max_retries=0 to fail fast if the key is out of quota
+            llm = ChatOpenAI(openai_api_key=openai_key, model=model_name, temperature=0.0, max_retries=0)
+            # Quick liveness validation probe
+            llm.invoke("probe")
+            return llm
+        except Exception:
+            pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
 
@@ -192,16 +227,30 @@ def preprocess_node(state: AgentState) -> dict:
     For refund requests, escalates when amount > $10 or legal keywords are present.
     """
     user_text = _latest_user_text(state)
-    detected_keywords = _scan_risk_keywords(user_text)
+    llm = _get_llm()
+    
+    if llm:
+        try:
+            structured_llm = llm.with_structured_output(RiskScan)
+            scan = structured_llm.invoke(f"Analyze the following support message: {user_text}")
+            detected_keywords = scan.detected_keywords
+            refund_requested = scan.refund_requested
+            legal_threat = scan.legal_threat
+        except Exception:
+            detected_keywords = _scan_risk_keywords(user_text)
+            refund_requested = _is_refund_requested(user_text)
+            legal_threat = _has_legal_keywords(user_text)
+    else:
+        detected_keywords = _scan_risk_keywords(user_text)
+        refund_requested = _is_refund_requested(user_text)
+        legal_threat = _has_legal_keywords(user_text)
+
     order_id = state.get("order_id") or _extract_order_id(user_text)
     refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
 
     requires_human_approval = bool(state.get("requires_human_approval", False))
     gate_response: dict = dict(state.get("gate_response", {}))
     audit_log = list(state.get("audit_log", []))
-
-    refund_requested = _is_refund_requested(user_text)
-    legal_threat = _has_legal_keywords(user_text)
 
     if refund_requested and (refund_amount > REFUND_THRESHOLD_USD or legal_threat):
         requires_human_approval = True
@@ -245,9 +294,23 @@ def preprocess_node(state: AgentState) -> dict:
 def planner_node(state: AgentState) -> dict:
     """Plan the next action based on intent and preprocess risk flags."""
     user_text = _latest_user_text(state)
-    intent = _detect_intent(user_text)
-    order_id = state.get("order_id") or _extract_order_id(user_text)
-    refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
+    llm = _get_llm()
+    
+    if llm:
+        try:
+            structured_llm = llm.with_structured_output(AnalysisPlan)
+            plan = structured_llm.invoke(f"Determine the intent and parameters of the following message: {user_text}")
+            intent = plan.intent
+            order_id = state.get("order_id") or plan.order_id or _extract_order_id(user_text)
+            refund_amount = state.get("refund_amount") or plan.refund_amount or _extract_refund_amount(user_text)
+        except Exception:
+            intent = _detect_intent(user_text)
+            order_id = state.get("order_id") or _extract_order_id(user_text)
+            refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
+    else:
+        intent = _detect_intent(user_text)
+        order_id = state.get("order_id") or _extract_order_id(user_text)
+        refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
 
     planned_action: PlannedAction = "none"
     requires_human_approval = bool(state.get("requires_human_approval", False))

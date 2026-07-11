@@ -145,7 +145,7 @@ Implemented in `app/agent/graph.py` and `app/agent/state.py`:
 | Component | Status | Description |
 |-----------|--------|-------------|
 | `AgentState` | ✅ Done | State keys: `messages`, `order_id`, `refund_amount`, `requires_human_approval`, `audit_log` |
-| Planner node | ✅ Done | Keyword-based intent detection; routes to order lookup or policy check |
+| Planner node | ✅ Done | LLM intent detection (structured output) with robust local regex fallback |
 | Human Gate node | ✅ Done | Pauses via `interrupt()` when approval is required |
 | Tool Executor node | ✅ Done | Runs mock tools only when approval is granted or not needed |
 | Graph compilation | ✅ Done | `MemorySaver` checkpointer for session persistence |
