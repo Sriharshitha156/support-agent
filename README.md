@@ -219,15 +219,16 @@ if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
 
 Run: `uvicorn app.main:app --reload`
 
-### Step 7 — Streamlit UI ✅
+### Step 7 — Streamlit UI (AI Operations Command Center) ✅
 
-Cyber-Security Operations Center (CSOC) Dashboard (`streamlit run ui.py`):
+Futuristic AI Mission Control Dashboard (`streamlit run ui.py`):
 
-- **Enterprise Theme**: Sleek dark mode operations aesthetic with neon green (success), amber (warning), and pulsing red (critical alert) status indicators.
-- **Dynamic Tabs**: Divided into *Agent Communications* (active chat ops), *Live Terminal Logs* (scrolling server logs + JSON audit tree), and *Corporate Policies* (inline policy viewers).
-- **Execution Stages Simulation**: Simulates risk compliant check, RAG lookup, and graph planning steps visually with delay triggers to prove agent loop processing.
-- **Pulsing Human Gate Override Card**: Alerts compliance managers to manual override actions, featuring high-visibility approve/reject override triggers.
-- **Real-Time Log Feeds**: Sidebar and tab terminals display operational event logs as they occur.
+- **Premium HUD Aesthetics**: Deep slate/black backdrop theme with glassmorphic cards (`backdrop-filter blur`), gradient highlights, and a modern layout inspired by OpenAI Operator and Palantir Foundry.
+- **Dynamic Agent Workflow Graph**: Rendered as an SVG graph showing the real-time node path (`INGRESS` $\rightarrow$ `PREPROCESS` $\rightarrow$ `PLANNER` $\rightarrow$ `POLICY RAG` $\rightarrow$ `HUMAN GATE` $\rightarrow$ `TOOL EXEC` $\rightarrow$ `COMPLIANCE` $\rightarrow$ `EGRESS`) with dynamic neon-glowing filters and state-active indicators.
+- **Supervisor Agent Net Panel**: Displays the live statuses of all supervisor nodes in the sidebar (Support, Compliance, Risk, Research, and Finance Agents) with visual breathing badges (`idle`, `thinking`, `running`, `waiting`).
+- **Live Tool Calls Stream**: Monospace terminal panel showing real-time timestamps, actions, status results, and execution duration for DB lookups, vector searches, and system updates.
+- **Manager Override Queue**: Pulse-red alert cards that isolate human override decisions (APPROVE / REJECT) to resume or block tool execution paths.
+- **Live Metrics HUD**: Tracks Tasks Completed, Average Latency, Tool Success Rate, Human Escalation totals, and execution costs in a top operations header.
 
 ### Step 8 — Evaluation suite ✅
 
