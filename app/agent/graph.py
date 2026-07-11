@@ -20,6 +20,7 @@ from langgraph.types import Command, interrupt
 
 from app.agent.state import AgentState
 from app.governance.audit import log_event
+from app.governance.refusal import verify_compliance
 from app.rag.policy_retriever import retrieve_policy, retrieve_policy_text
 from app.tools.support_tools import (
     MAX_AUTO_REFUND_USD,
@@ -486,6 +487,21 @@ def tool_executor_node(state: AgentState) -> dict:
         tool_result = {"error": str(exc), "order_id": order_id, "refund_amount": refund_amount}
         audit_action = "refund_blocked"
         risk_level = "high"
+
+    compliance = verify_compliance(response_message, state)
+    if not compliance["compliant"]:
+        # Log policy violation before updating message
+        log_event(
+            "policy_violation",
+            {
+                "original_response": response_message,
+                "modified_response": compliance["modified_text"],
+                "action": compliance["action"],
+                "reason": compliance["reason"],
+            },
+            risk_level="high",
+        )
+        response_message = compliance["modified_text"]
 
     audit_log = _log_step(
         state.get("audit_log", []),

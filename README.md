@@ -194,8 +194,9 @@ if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
 | Policy RAG | `app/rag/policy_retriever.py` | Query policies from ChromaDB with self-healing ingestion support |
 | Vector Store | `app/rag/vectorstore.py` | Persistent ChromaDB collection wrapper (API-key check & `HashingEmbeddings` offline fallback) |
 | Ingestion | `app/rag/ingestion.py` | Pipeline loading/chunking docs from `data/policies/` and `policies.txt` to ChromaDB |
+| Compliance Refusal | `app/governance/refusal.py` | Audits agent response to block PII exposure and enforce refund eligibility |
 | Governance | `app/governance/audit.py` | `log_event()` persists every agent step to `data/audit_log.json` |
-| Agent graph | `app/agent/graph.py` | Updated to call real tools, policy retriever, and audit logger |
+| Agent graph | `app/agent/graph.py` | Updated to call real tools, policy retriever, and compliance refusal checks |
 
 ### Step 5 — Strict Human Gate enforcement ✅
 
