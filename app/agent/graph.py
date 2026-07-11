@@ -2,6 +2,9 @@
 LangGraph graph definition and compilation.
 
 Exports a compiled `graph` with checkpointer for session persistence.
+
+Flow: Request -> Preprocess -> Planner -> [Human Gate | Tool Executor]
+      Human Gate -> Wait -> Approve/Reject -> [Tool Executor | End]
 """
 
 from __future__ import annotations
@@ -27,12 +30,13 @@ from app.tools.support_tools import (
 from data.mock_orders import OrderNotFoundError
 
 # ---------------------------------------------------------------------------
-# Constants & routing labels
+# Constants
 # ---------------------------------------------------------------------------
 
 PlannedAction = Literal["none", "order_lookup", "policy_check", "refund"]
-ESCALATION_KEYWORDS = ("sue", "lawyer", "complaint")
-REFUND_KEYWORDS = ("refund", "return")
+RISK_SCAN_KEYWORDS = ("sue", "lawyer", "legal", "refund", "compensation")
+LEGAL_KEYWORDS = ("sue", "lawyer", "legal")
+REFUND_REQUEST_KEYWORDS = ("refund", "return", "compensation")
 ORDER_STATUS_KEYWORDS = (
     "order status",
     "track my order",
@@ -41,6 +45,11 @@ ORDER_STATUS_KEYWORDS = (
     "track order",
 )
 REFUND_THRESHOLD_USD = MAX_AUTO_REFUND_USD
+WAITING_APPROVAL_REASON = "High value refund or legal threat detected."
+REJECTION_MESSAGE = (
+    "Thank you for your patience. After review, we are unable to proceed with "
+    "this request automatically. A support specialist will follow up if needed."
+)
 
 PLANNED_ACTION_KEY = "planned_action"
 APPROVAL_REASON_KEY = "approval_reason"
@@ -68,7 +77,6 @@ def _log_step(
     risk_level: str = "low",
     **details,
 ) -> list[dict]:
-    """Append to in-memory state audit log and persist via governance audit."""
     payload = {"step": step, "action": action, **details}
     log_event(event_type, payload, risk_level)
     return _append_audit(audit_log, payload)
@@ -108,9 +116,24 @@ def _detect_intent(text: str) -> str:
     lowered = text.lower()
     if any(keyword in lowered for keyword in ORDER_STATUS_KEYWORDS) or "status" in lowered:
         return "order_status"
-    if any(keyword in lowered for keyword in REFUND_KEYWORDS):
+    if any(keyword in lowered for keyword in REFUND_REQUEST_KEYWORDS):
         return "refund"
     return "general"
+
+
+def _scan_risk_keywords(text: str) -> list[str]:
+    lowered = text.lower()
+    return [keyword for keyword in RISK_SCAN_KEYWORDS if keyword in lowered]
+
+
+def _has_legal_keywords(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in LEGAL_KEYWORDS)
+
+
+def _is_refund_requested(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in REFUND_REQUEST_KEYWORDS)
 
 
 def _get_planner_context(state: AgentState) -> dict:
@@ -120,14 +143,30 @@ def _get_planner_context(state: AgentState) -> dict:
     return {}
 
 
-def _risk_for_refund(amount: float, escalation: bool) -> str:
-    if escalation:
-        return "high"
-    if amount > REFUND_THRESHOLD_USD:
-        return "high"
-    if amount > 0:
-        return "medium"
-    return "low"
+def _waiting_approval_payload() -> dict:
+    return {
+        "type": "WAITING_APPROVAL",
+        "reason": WAITING_APPROVAL_REASON,
+    }
+
+
+def _normalize_approval_decision(raw_decision: object) -> str:
+    if isinstance(raw_decision, str):
+        normalized = raw_decision.strip().lower()
+        if normalized in ("approve", "reject"):
+            return normalized
+    if isinstance(raw_decision, dict):
+        if raw_decision.get("decision") in ("approve", "reject"):
+            return str(raw_decision["decision"])
+        if raw_decision.get("approved") is True:
+            return "approve"
+        if raw_decision.get("approved") is False:
+            return "reject"
+    if raw_decision is True:
+        return "approve"
+    if raw_decision is False:
+        return "reject"
+    return "reject"
 
 
 # ---------------------------------------------------------------------------
@@ -135,43 +174,91 @@ def _risk_for_refund(amount: float, escalation: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
+def preprocess_node(state: AgentState) -> dict:
+    """
+    Pre-process user input: scan risk keywords and enforce human gate rules.
+
+    For refund requests, escalates when amount > $10 or legal keywords are present.
+    """
+    user_text = _latest_user_text(state)
+    detected_keywords = _scan_risk_keywords(user_text)
+    order_id = state.get("order_id") or _extract_order_id(user_text)
+    refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
+
+    requires_human_approval = bool(state.get("requires_human_approval", False))
+    gate_response: dict = dict(state.get("gate_response", {}))
+    audit_log = list(state.get("audit_log", []))
+
+    refund_requested = _is_refund_requested(user_text)
+    legal_threat = _has_legal_keywords(user_text)
+
+    if refund_requested and (refund_amount > REFUND_THRESHOLD_USD or legal_threat):
+        requires_human_approval = True
+        gate_response = _waiting_approval_payload()
+        audit_log = _log_step(
+            audit_log,
+            event_type="RISK_DETECTED",
+            step="preprocess",
+            action="RISK_DETECTED: Escalating to human.",
+            risk_level="high",
+            message="RISK_DETECTED: Escalating to human.",
+            detected_keywords=detected_keywords,
+            refund_amount=refund_amount,
+            legal_threat=legal_threat,
+            gate_response=gate_response,
+        )
+
+    audit_log = _log_step(
+        audit_log,
+        event_type="preprocess",
+        step="preprocess",
+        action="keyword_scan",
+        risk_level="high" if requires_human_approval else "low",
+        detected_keywords=detected_keywords,
+        refund_requested=refund_requested,
+        refund_amount=refund_amount,
+        legal_threat=legal_threat,
+        requires_human_approval=requires_human_approval,
+    )
+
+    return {
+        "order_id": order_id,
+        "refund_amount": refund_amount,
+        "requires_human_approval": requires_human_approval,
+        "detected_risk_keywords": detected_keywords,
+        "gate_response": gate_response,
+        "audit_log": audit_log,
+    }
+
+
 def planner_node(state: AgentState) -> dict:
-    """Analyze user input, retrieve policy context, and plan the next action."""
+    """Plan the next action based on intent and preprocess risk flags."""
     user_text = _latest_user_text(state)
     intent = _detect_intent(user_text)
     order_id = state.get("order_id") or _extract_order_id(user_text)
     refund_amount = state.get("refund_amount") or _extract_refund_amount(user_text)
 
     planned_action: PlannedAction = "none"
-    requires_human_approval = False
-    approval_reason = ""
+    requires_human_approval = bool(state.get("requires_human_approval", False))
+    gate_response = dict(state.get("gate_response", {}))
+    approval_reason = gate_response.get("reason", "")
     policy_snippets: list[dict] = []
-
-    escalation_hit = next((kw for kw in ESCALATION_KEYWORDS if kw in user_text.lower()), None)
 
     if intent == "order_status":
         planned_action = "order_lookup"
     elif intent == "refund":
-        planned_action = "policy_check"
+        planned_action = "policy_check" if not requires_human_approval else "refund"
         policy_snippets = retrieve_policy(user_text)
-        if escalation_hit:
-            requires_human_approval = True
-            approval_reason = f"escalation language detected ('{escalation_hit}')"
-            planned_action = "refund"
-        elif refund_amount > REFUND_THRESHOLD_USD:
-            requires_human_approval = True
-            approval_reason = (
-                f"refund amount ${refund_amount:.2f} exceeds "
-                f"${REFUND_THRESHOLD_USD:.2f} threshold"
-            )
+        if requires_human_approval and not gate_response:
+            gate_response = _waiting_approval_payload()
+            approval_reason = gate_response["reason"]
 
-    risk_level = _risk_for_refund(refund_amount, bool(escalation_hit))
     audit_log = _log_step(
         state.get("audit_log", []),
         event_type="intent_detection",
         step="planner",
         action="intent_detection",
-        risk_level=risk_level,
+        risk_level="high" if requires_human_approval else "low",
         intent=intent,
         **{
             PLANNED_ACTION_KEY: planned_action,
@@ -188,15 +275,18 @@ def planner_node(state: AgentState) -> dict:
         "order_id": order_id,
         "refund_amount": refund_amount,
         "requires_human_approval": requires_human_approval,
+        "gate_response": gate_response,
         "audit_log": audit_log,
     }
 
 
 def human_gate_node(state: AgentState) -> dict:
-    """Pause for human approval when required."""
-    planner_ctx = _get_planner_context(state)
-    reason = planner_ctx.get(APPROVAL_REASON_KEY) or "high-risk request"
-    pause_message = f"ACTION_REQUIRED: Human approval needed for {reason}. Waiting for input."
+    """Pause workflow and wait for explicit human approve/reject decision."""
+    gate_response = state.get("gate_response") or _waiting_approval_payload()
+    pause_message = (
+        f"ACTION_REQUIRED: {gate_response['reason']} "
+        f"Response type: {gate_response['type']}. Waiting for input."
+    )
 
     audit_log = _log_step(
         state.get("audit_log", []),
@@ -204,50 +294,68 @@ def human_gate_node(state: AgentState) -> dict:
         step="human_gate",
         action="pause",
         risk_level="high",
-        reason=reason,
+        gate_response=gate_response,
         message=pause_message,
     )
 
-    human_decision = interrupt(
-        {
-            "type": "human_approval",
-            "reason": reason,
-            "message": pause_message,
+    raw_decision = interrupt(gate_response)
+    return approve_human_action(
+        {**state, "audit_log": audit_log},
+        _normalize_approval_decision(raw_decision),
+    )
+
+
+def approve_human_action(state: AgentState, approval_decision: str) -> dict:
+    """
+    Apply a human decision after the gate pauses.
+
+    - ``approve``: clears the approval flag so the tool executor can run.
+    - ``reject``: ends with a polite refusal message.
+    """
+    decision = approval_decision.strip().lower()
+    if decision not in ("approve", "reject"):
+        raise ValueError("approval_decision must be 'approve' or 'reject'")
+
+    gate_response = state.get("gate_response") or _waiting_approval_payload()
+
+    if decision == "approve":
+        audit_log = _log_step(
+            state.get("audit_log", []),
+            event_type="human_gate_resume",
+            step="human_gate",
+            action="approved",
+            risk_level="medium",
+            gate_response=gate_response,
+            approval_decision=decision,
+        )
+        return {
+            "messages": [AIMessage(content="Human approval granted. Proceeding with requested action.")],
+            "requires_human_approval": False,
+            "approval_status": "approved",
+            "gate_response": gate_response,
+            "audit_log": audit_log,
         }
-    )
-
-    approved = False
-    if isinstance(human_decision, dict):
-        approved = bool(human_decision.get("approved", False))
-    elif isinstance(human_decision, bool):
-        approved = human_decision
-
-    resolution_message = (
-        "Human approval granted. Proceeding with requested action."
-        if approved
-        else pause_message
-    )
 
     audit_log = _log_step(
-        audit_log,
+        state.get("audit_log", []),
         event_type="human_gate_resume",
         step="human_gate",
-        action="resume",
-        risk_level="high" if not approved else "medium",
-        approved=approved,
-        human_decision=human_decision,
-        message=resolution_message,
+        action="rejected",
+        risk_level="high",
+        gate_response=gate_response,
+        approval_decision=decision,
     )
-
     return {
-        "messages": [AIMessage(content=resolution_message)],
-        "requires_human_approval": not approved,
+        "messages": [AIMessage(content=REJECTION_MESSAGE)],
+        "requires_human_approval": False,
+        "approval_status": "rejected",
+        "gate_response": gate_response,
         "audit_log": audit_log,
     }
 
 
 def tool_executor_node(state: AgentState) -> dict:
-    """Execute support tools when human approval is not required or has been granted."""
+    """Execute support tools only when human approval is not required."""
     if state.get("requires_human_approval"):
         audit_log = _log_step(
             state.get("audit_log", []),
@@ -255,12 +363,23 @@ def tool_executor_node(state: AgentState) -> dict:
             step="tool_executor",
             action="skipped",
             risk_level="medium",
-            reason="human approval still required",
+            reason="requires_human_approval is True — apply_refund blocked",
         )
         return {
             "messages": [AIMessage(content="Tool execution blocked: awaiting human approval.")],
             "audit_log": audit_log,
         }
+
+    if state.get("approval_status") == "rejected":
+        audit_log = _log_step(
+            state.get("audit_log", []),
+            event_type="tool_skipped",
+            step="tool_executor",
+            action="skipped",
+            risk_level="low",
+            reason="human rejection — tools not executed",
+        )
+        return {"messages": [AIMessage(content=REJECTION_MESSAGE)], "audit_log": audit_log}
 
     planner_ctx = _get_planner_context(state)
     planned_action: PlannedAction = planner_ctx.get(PLANNED_ACTION_KEY, "none")
@@ -278,7 +397,6 @@ def tool_executor_node(state: AgentState) -> dict:
             tool_result = check_order_status(order_id)
             response_message = tool_result["message"]
             audit_action = "order_lookup"
-            risk_level = "low"
 
         elif planned_action in ("policy_check", "refund"):
             policy_snippets = retrieve_policy(user_text or f"refund order {order_id}")
@@ -297,18 +415,21 @@ def tool_executor_node(state: AgentState) -> dict:
                 audit_action = "policy_check"
                 risk_level = "high"
             elif refund_amount > 0:
+                if state.get("requires_human_approval"):
+                    raise ValueError("apply_refund blocked: human approval required")
                 tool_result = apply_refund(order_id, refund_amount)
                 response_message = tool_result["message"]
                 audit_action = "refund"
                 risk_level = "medium"
             else:
                 order_info = check_order_status(order_id)
-                if order_info.get("days_late", 0) >= 3 and order_info.get("total_usd", 0) <= REFUND_THRESHOLD_USD:
+                if (
+                    order_info.get("days_late", 0) >= 3
+                    and order_info.get("total_usd", 0) <= REFUND_THRESHOLD_USD
+                ):
                     credit_amount = min(10.0, order_info["total_usd"])
                     tool_result = send_goodwill_credit(credit_amount)
-                    response_message = (
-                        f"{tool_result['message']} Policy applied:\n{policy_text}"
-                    )
+                    response_message = f"{tool_result['message']} Policy applied:\n{policy_text}"
                     audit_action = "goodwill_credit"
                 else:
                     tool_result = {
@@ -324,11 +445,7 @@ def tool_executor_node(state: AgentState) -> dict:
 
             log_event(
                 "policy_retrieval",
-                {
-                    "step": "tool_executor",
-                    "order_id": order_id,
-                    "policy_snippets": policy_snippets,
-                },
+                {"step": "tool_executor", "order_id": order_id, "policy_snippets": policy_snippets},
                 "medium",
             )
 
@@ -377,6 +494,8 @@ def route_after_planner(state: AgentState) -> str:
 
 
 def route_after_human_gate(state: AgentState) -> str:
+    if state.get("approval_status") == "rejected":
+        return END
     if state.get("requires_human_approval"):
         return END
     planner_ctx = _get_planner_context(state)
@@ -394,11 +513,13 @@ def build_graph():
     """Compile the support agent graph with an in-memory checkpointer."""
     workflow = StateGraph(AgentState)
 
+    workflow.add_node("preprocess", preprocess_node)
     workflow.add_node("planner", planner_node)
     workflow.add_node("human_gate", human_gate_node)
     workflow.add_node("tool_executor", tool_executor_node)
 
-    workflow.set_entry_point("planner")
+    workflow.set_entry_point("preprocess")
+    workflow.add_edge("preprocess", "planner")
 
     workflow.add_conditional_edges(
         "planner",
@@ -447,7 +568,20 @@ def invoke_agent(
     return graph.invoke(initial_state, config=config)
 
 
-def resume_agent(human_decision: dict | bool, *, thread_id: str = "default") -> dict:
-    """Resume a paused graph after human gate interrupt."""
+def resume_human_gate(approval_decision: str, *, thread_id: str = "default") -> dict:
+    """Resume a paused human gate with an explicit approve/reject decision."""
+    decision = approval_decision.strip().lower()
+    if decision not in ("approve", "reject"):
+        raise ValueError("approval_decision must be 'approve' or 'reject'")
     config = {"configurable": {"thread_id": thread_id}}
-    return graph.invoke(Command(resume=human_decision), config=config)
+    return graph.invoke(Command(resume={"decision": decision}), config=config)
+
+
+def resume_agent(human_decision: dict | bool | str, *, thread_id: str = "default") -> dict:
+    """Backward-compatible resume helper."""
+    if isinstance(human_decision, str):
+        return resume_human_gate(human_decision, thread_id=thread_id)
+    if isinstance(human_decision, dict) and "decision" in human_decision:
+        return resume_human_gate(str(human_decision["decision"]), thread_id=thread_id)
+    normalized = "approve" if human_decision else "reject"
+    return resume_human_gate(normalized, thread_id=thread_id)

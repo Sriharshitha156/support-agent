@@ -146,29 +146,31 @@ Implemented in `app/agent/graph.py` and `app/agent/state.py`:
 **Agent flow:**
 
 ```
-User message → Planner → [Human Gate | Tool Executor] → Response
+User message → Preprocess → Planner → [Human Gate | Tool Executor] → Response
+Human Gate: Wait → Approve/Reject → [Tool Executor | End]
 ```
 
-**Escalation rules (enforced by Planner):**
+**Escalation rules (enforced by Preprocess + Human Gate):**
 
-- Refund amount **> $10** → requires human approval; refund tool blocked until approved
-- Keywords **sue / lawyer / complaint** → requires human approval
+- Refund amount **> $10** → `requires_human_approval = True`; `apply_refund` blocked
+- Legal keywords **sue / lawyer / legal** on refund requests → human gate required
+- Risk scan keywords: `sue`, `lawyer`, `legal`, `refund`, `compensation`
 - Order status queries → `check_order_status()`
 - Small refunds (≤ $10) → `apply_refund()` after policy retrieval
-- Late orders (≥ 3 days) → `send_goodwill_credit()` when no amount specified
 
 **Usage example:**
 
 ```python
-from app.agent import invoke_agent, resume_agent
+from app.agent import invoke_agent, resume_human_gate
 
 # Normal flow
 result = invoke_agent("What is my order status for C1234?", thread_id="session-1")
 
 # High-value refund — pauses at human gate
 result = invoke_agent("Refund $25 for B9999", thread_id="session-2")
-if "__interrupt__" in result:
-    resumed = resume_agent({"approved": True}, thread_id="session-2")
+if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
+    approved = resume_human_gate("approve", thread_id="session-2")
+    rejected = resume_human_gate("reject", thread_id="session-2")
 ```
 
 ### Step 4 — Supporting modules & real integrations ✅
@@ -180,6 +182,16 @@ if "__interrupt__" in result:
 | Policy RAG | `app/rag/policy_retriever.py` | `CharacterTextSplitter` + `InMemoryVectorStore` over `data/policies.txt` |
 | Governance | `app/governance/audit.py` | `log_event()` persists every agent step to `data/audit_log.json` |
 | Agent graph | `app/agent/graph.py` | Updated to call real tools, policy retriever, and audit logger |
+
+### Step 5 — Strict Human Gate enforcement ✅
+
+| Feature | Description |
+|---------|-------------|
+| Preprocess node | Scans `sue`, `lawyer`, `legal`, `refund`, `compensation` before planning |
+| `WAITING_APPROVAL` | Returns `{"type": "WAITING_APPROVAL", "reason": "High value refund or legal threat detected."}` |
+| `RISK_DETECTED` | Governance log entry: `"RISK_DETECTED: Escalating to human."` |
+| `approve_human_action()` | `"approve"` clears flag and routes to tool executor; `"reject"` ends with polite refusal |
+| Refund safety | `apply_refund` never called when `requires_human_approval` is `True` |
 
 **Mock order scenarios:**
 
@@ -198,9 +210,10 @@ if "__interrupt__" in result:
 | Step | Module | Status |
 |------|--------|--------|
 | 4 | Supporting modules (tools, RAG, governance) | ✅ Done |
-| 5 | FastAPI backend (`app.py`) | 🔲 Pending |
-| 6 | Streamlit UI (`ui.py`) | 🔲 Pending |
-| 7 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
+| 5 | Strict Human Gate enforcement | ✅ Done |
+| 6 | FastAPI backend (`app.py`) | 🔲 Pending |
+| 7 | Streamlit UI (`ui.py`) | 🔲 Pending |
+| 8 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
 
 ---
 

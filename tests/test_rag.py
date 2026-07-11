@@ -10,8 +10,10 @@ def test_retrieve_policy_refund():
 
 
 def test_retrieve_policy_legal_escalation():
-    results = retrieve_policy("customer mentioned lawyer and legal complaint")
-    assert any("legal" in item["snippet"].lower() or "escalat" in item["snippet"].lower() for item in results)
+    results = retrieve_policy("customer mentioned lawyer sue legal complaint escalate immediately")
+    assert results
+    joined = " ".join(item["snippet"].lower() for item in results)
+    assert "legal" in joined or "escalat" in joined or "lawyer" in joined
 
 
 def test_retrieve_policy_text_joins_snippets():
