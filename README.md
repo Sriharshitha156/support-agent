@@ -98,12 +98,21 @@ Edit `.env` and set your `OPENAI_API_KEY`.
 pytest tests/ -v
 ```
 
-### 4. Run the app (coming soon)
+### 4. Run the app
+
+**Streamlit demo (recommended for capstone demo):**
 
 ```powershell
-uvicorn app:app --reload          # API on :8000
-streamlit run ui.py               # UI on :8501
+streamlit run ui.py
 ```
+
+**FastAPI backend (optional — for API clients):**
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+API docs: http://localhost:8000/docs
 
 ---
 
@@ -193,6 +202,26 @@ if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
 | `approve_human_action()` | `"approve"` clears flag and routes to tool executor; `"reject"` ends with polite refusal |
 | Refund safety | `apply_refund` never called when `requires_human_approval` is `True` |
 
+### Step 6 — FastAPI backend ✅
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/chat` | POST | Send message + `session_id`, get agent response |
+| `/approve` | POST | Send `session_id` + `decision` (`approve`/`reject`) |
+| `/get_audit_log` | GET | Last 10 governance audit events |
+| `/health` | GET | Liveness check |
+
+Run: `uvicorn app.main:app --reload`
+
+### Step 7 — Streamlit UI ✅
+
+Standalone chat app (`streamlit run ui.py`) that imports the agent graph directly:
+
+- Chat interface with `st.chat_input`
+- Red **Human Approval Required** box when `WAITING_APPROVAL`
+- **Approve** / **Reject** buttons call `resume_human_gate()`
+- Sidebar **View Audit Log** for governance demo
+
 **Mock order scenarios:**
 
 | Order ID | Scenario |
@@ -211,8 +240,8 @@ if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
 |------|--------|--------|
 | 4 | Supporting modules (tools, RAG, governance) | ✅ Done |
 | 5 | Strict Human Gate enforcement | ✅ Done |
-| 6 | FastAPI backend (`app.py`) | 🔲 Pending |
-| 7 | Streamlit UI (`ui.py`) | 🔲 Pending |
+| 6 | FastAPI backend (`app/main.py`) | ✅ Done |
+| 7 | Streamlit UI (`ui.py`) | ✅ Done |
 | 8 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
 
 ---
@@ -232,7 +261,7 @@ Current coverage:
 | `test_support_tools.py` | Support tools (refund limits, goodwill credit) |
 | `test_rag.py` | Policy retrieval |
 | `test_governance.py` | Audit file logging |
-| `test_api.py` | FastAPI endpoints (placeholder) |
+| `test_api.py` | FastAPI `/chat`, `/approve`, `/get_audit_log` |
 
 ---
 

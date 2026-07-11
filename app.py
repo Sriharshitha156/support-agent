@@ -1,13 +1,13 @@
 """
-FastAPI backend for the Customer Support Resolution Agent.
+FastAPI backend entrypoint.
 
-Exposes REST endpoints:
+The implementation lives in `app/main.py` because the `app/` package name
+shadows a root-level `app.py` module in Python imports.
 
-- POST /chat          — send a customer message, receive agent response
-- GET  /health        — liveness check
-- POST /ingest        — trigger policy document ingestion (admin)
-- GET  /audit/{session_id} — retrieve audit trail for a session
-
-Initializes the compiled LangGraph agent on startup and wires CORS for
-the Streamlit frontend. Configuration loaded from environment / .env.
+Run:
+    uvicorn app.main:app --reload
 """
+
+from app.main import app
+
+__all__ = ["app"]

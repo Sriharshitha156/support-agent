@@ -54,3 +54,11 @@ def log_event(event_type: str, details: dict[str, Any], risk_level: str = "low")
     events.append(entry)
     _write_events(path, events)
     return entry
+
+
+def get_recent_audit_logs(limit: int = 10) -> list[dict[str, Any]]:
+    """Return the most recent audit events for demo / governance views."""
+    events = _read_events(_audit_path())
+    if limit <= 0:
+        return []
+    return events[-limit:]

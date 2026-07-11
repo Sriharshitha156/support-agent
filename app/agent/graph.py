@@ -585,3 +585,37 @@ def resume_agent(human_decision: dict | bool | str, *, thread_id: str = "default
         return resume_human_gate(str(human_decision["decision"]), thread_id=thread_id)
     normalized = "approve" if human_decision else "reject"
     return resume_human_gate(normalized, thread_id=thread_id)
+
+
+def format_agent_result(state: dict) -> dict:
+    """Normalize graph state into a stable API/UI payload."""
+    gate_response = dict(state.get("gate_response") or {})
+    if "__interrupt__" in state and state["__interrupt__"]:
+        interrupt_value = state["__interrupt__"][0].value
+        if isinstance(interrupt_value, dict):
+            gate_response = interrupt_value
+
+    approval_status = state.get("approval_status", "")
+    waiting = approval_status not in ("approved", "rejected") and (
+        gate_response.get("type") == "WAITING_APPROVAL"
+        or (state.get("requires_human_approval") and "__interrupt__" in state)
+    )
+
+    response_text = ""
+    for message in reversed(state.get("messages", [])):
+        if isinstance(message, AIMessage):
+            response_text = message.content if isinstance(message.content, str) else str(message.content)
+            break
+
+    if waiting and not response_text:
+        reason = gate_response.get("reason", "High value refund or legal threat detected.")
+        response_text = f"WAITING_APPROVAL: {reason}"
+
+    return {
+        "status": "WAITING_APPROVAL" if waiting else "complete",
+        "response": response_text,
+        "gate_response": gate_response,
+        "requires_human_approval": bool(state.get("requires_human_approval")),
+        "approval_status": state.get("approval_status", ""),
+        "audit_log": state.get("audit_log", []),
+    }

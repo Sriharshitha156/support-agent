@@ -3,6 +3,7 @@
 from app.agent.graph import (
     approve_human_action,
     build_graph,
+    format_agent_result,
     graph,
     invoke_agent,
     resume_agent,
@@ -14,6 +15,7 @@ __all__ = [
     "AgentState",
     "approve_human_action",
     "build_graph",
+    "format_agent_result",
     "graph",
     "invoke_agent",
     "resume_agent",
