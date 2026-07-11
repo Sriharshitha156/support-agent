@@ -23,21 +23,46 @@ A capstone project that builds an AI-powered customer support agent using **Lang
 
 ```
 support-agent/
-├── app.py                  # FastAPI backend (placeholder)
-├── ui.py                   # Streamlit frontend (placeholder)
-├── eval_suite.py           # Evaluation script (placeholder)
-├── requirements.txt        # Python dependencies
-├── setup.ps1 / setup.sh    # Virtual environment setup
-├── .env.example            # Environment variable template
+├── app.py                      # FastAPI backend (placeholder)
+├── ui.py                       # Streamlit frontend (placeholder)
+├── eval_suite.py               # Evaluation script (placeholder)
+├── requirements.txt            # Python dependencies
+├── pytest.ini                  # Pytest config (pythonpath)
+├── setup.ps1 / setup.sh        # Virtual environment setup
+├── .env.example                # Environment variable template
 ├── app/
-│   ├── agent/              # LangGraph state, nodes, graph
-│   ├── tools/              # Order lookup, refund, human gate
-│   ├── rag/                # Vector store & policy ingestion
-│   └── governance/         # Audit logging & refusal logic
-├── tests/                  # Pytest test suite
+│   ├── agent/
+│   │   ├── state.py            # AgentState schema
+│   │   ├── nodes.py            # Node placeholders
+│   │   └── graph.py            # LangGraph planner, human gate, tool executor
+│   ├── tools/
+│   │   ├── support_tools.py    # check_order_status, apply_refund, goodwill credit
+│   │   ├── order_lookup.py     # (placeholder)
+│   │   ├── refund_tool.py      # (placeholder)
+│   │   └── human_gate.py       # (placeholder)
+│   ├── rag/
+│   │   ├── policy_retriever.py # Policy RAG (InMemoryVectorStore)
+│   │   ├── vectorstore.py      # (placeholder)
+│   │   └── ingestion.py        # (placeholder)
+│   └── governance/
+│       ├── audit.py            # log_event() → data/audit_log.json
+│       └── refusal.py          # (placeholder)
+├── tests/
+│   ├── test_agent.py           # LangGraph integration tests
+│   ├── test_support_tools.py   # Support tool unit tests
+│   ├── test_tools.py           # Mock order lookup tests
+│   ├── test_rag.py             # Policy retrieval tests
+│   ├── test_governance.py      # Audit logging tests
+│   └── test_api.py             # (placeholder)
 └── data/
-    ├── orders/             # Mock order database
-    └── policies/           # Support policy documents
+    ├── mock_orders.py          # 5 fake orders + lookup_order()
+    ├── policies.txt            # 3 policies for RAG retrieval
+    ├── orders/
+    │   └── mock_orders.json    # Legacy sample orders
+    └── policies/
+        ├── refund_policy.md
+        ├── shipping_policy.md
+        └── privacy_policy.md
 ```
 
 ---
