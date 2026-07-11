@@ -6,7 +6,6 @@ Exports a compiled `graph` with checkpointer for session persistence.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -17,6 +16,15 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 
 from app.agent.state import AgentState
+from app.governance.audit import log_event
+from app.rag.policy_retriever import retrieve_policy, retrieve_policy_text
+from app.tools.support_tools import (
+    MAX_AUTO_REFUND_USD,
+    apply_refund,
+    check_order_status,
+    send_goodwill_credit,
+)
+from data.mock_orders import OrderNotFoundError
 
 # ---------------------------------------------------------------------------
 # Constants & routing labels
@@ -25,16 +33,21 @@ from app.agent.state import AgentState
 PlannedAction = Literal["none", "order_lookup", "policy_check", "refund"]
 ESCALATION_KEYWORDS = ("sue", "lawyer", "complaint")
 REFUND_KEYWORDS = ("refund", "return")
-ORDER_STATUS_KEYWORDS = ("order status", "track my order", "where is my order", "shipping status", "track order")
-REFUND_THRESHOLD_USD = 10.0
+ORDER_STATUS_KEYWORDS = (
+    "order status",
+    "track my order",
+    "where is my order",
+    "shipping status",
+    "track order",
+)
+REFUND_THRESHOLD_USD = MAX_AUTO_REFUND_USD
 
-# Stored on the last planner audit entry for downstream routing.
 PLANNED_ACTION_KEY = "planned_action"
 APPROVAL_REASON_KEY = "approval_reason"
 
 
 # ---------------------------------------------------------------------------
-# Audit helper
+# Audit helpers
 # ---------------------------------------------------------------------------
 
 
@@ -46,6 +59,21 @@ def _append_audit(audit_log: list[dict], entry: dict) -> list[dict]:
     return audit_log + [{**entry, "timestamp": _utcnow()}]
 
 
+def _log_step(
+    audit_log: list[dict],
+    *,
+    event_type: str,
+    step: str,
+    action: str,
+    risk_level: str = "low",
+    **details,
+) -> list[dict]:
+    """Append to in-memory state audit log and persist via governance audit."""
+    payload = {"step": step, "action": action, **details}
+    log_event(event_type, payload, risk_level)
+    return _append_audit(audit_log, payload)
+
+
 def _latest_user_text(state: AgentState) -> str:
     for message in reversed(state["messages"]):
         if isinstance(message, HumanMessage):
@@ -54,8 +82,12 @@ def _latest_user_text(state: AgentState) -> str:
 
 
 def _extract_order_id(text: str) -> str:
-    match = re.search(r"ORD-\d+", text, re.IGNORECASE)
-    return match.group(0).upper() if match else ""
+    order_match = re.search(r"\b[A-Z]\d{4}\b", text, re.IGNORECASE)
+    if order_match:
+        return order_match.group(0).upper()
+
+    legacy_match = re.search(r"ORD-\d+", text, re.IGNORECASE)
+    return legacy_match.group(0).upper() if legacy_match else ""
 
 
 def _extract_refund_amount(text: str) -> float:
@@ -88,47 +120,14 @@ def _get_planner_context(state: AgentState) -> dict:
     return {}
 
 
-# ---------------------------------------------------------------------------
-# Mock tools (real implementations come in app/tools/)
-# ---------------------------------------------------------------------------
-
-
-def mock_order_lookup(order_id: str) -> dict:
-    """Simulate order status lookup."""
-    return {
-        "order_id": order_id or "ORD-UNKNOWN",
-        "status": "delivered",
-        "carrier": "MockShip",
-        "eta": "2026-07-05",
-        "message": f"Order {order_id} was delivered on 2026-07-05.",
-    }
-
-
-def mock_policy_check(order_id: str, refund_amount: float) -> dict:
-    """Simulate refund policy evaluation."""
-    eligible = refund_amount <= 500.0
-    return {
-        "order_id": order_id or "ORD-UNKNOWN",
-        "refund_amount": refund_amount,
-        "eligible": eligible,
-        "policy": "30-day return window",
-        "message": (
-            f"Refund of ${refund_amount:.2f} is within policy."
-            if eligible
-            else f"Refund of ${refund_amount:.2f} exceeds automated policy limits."
-        ),
-    }
-
-
-def mock_refund_tool(order_id: str, refund_amount: float) -> dict:
-    """Simulate refund processing."""
-    return {
-        "order_id": order_id or "ORD-UNKNOWN",
-        "refund_amount": refund_amount,
-        "confirmation_id": "RFND-MOCK-001",
-        "status": "approved",
-        "message": f"Refund of ${refund_amount:.2f} initiated for {order_id}.",
-    }
+def _risk_for_refund(amount: float, escalation: bool) -> str:
+    if escalation:
+        return "high"
+    if amount > REFUND_THRESHOLD_USD:
+        return "high"
+    if amount > 0:
+        return "medium"
+    return "low"
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +136,7 @@ def mock_refund_tool(order_id: str, refund_amount: float) -> dict:
 
 
 def planner_node(state: AgentState) -> dict:
-    """
-    Analyze the latest user message, classify intent, and decide next action.
-
-    Sets requires_human_approval when refund > $10 or escalation language is detected.
-    """
+    """Analyze user input, retrieve policy context, and plan the next action."""
     user_text = _latest_user_text(state)
     intent = _detect_intent(user_text)
     order_id = state.get("order_id") or _extract_order_id(user_text)
@@ -150,6 +145,7 @@ def planner_node(state: AgentState) -> dict:
     planned_action: PlannedAction = "none"
     requires_human_approval = False
     approval_reason = ""
+    policy_snippets: list[dict] = []
 
     escalation_hit = next((kw for kw in ESCALATION_KEYWORDS if kw in user_text.lower()), None)
 
@@ -157,52 +153,59 @@ def planner_node(state: AgentState) -> dict:
         planned_action = "order_lookup"
     elif intent == "refund":
         planned_action = "policy_check"
+        policy_snippets = retrieve_policy(user_text)
         if escalation_hit:
             requires_human_approval = True
             approval_reason = f"escalation language detected ('{escalation_hit}')"
             planned_action = "refund"
         elif refund_amount > REFUND_THRESHOLD_USD:
             requires_human_approval = True
-            approval_reason = f"refund amount ${refund_amount:.2f} exceeds ${REFUND_THRESHOLD_USD:.2f} threshold"
+            approval_reason = (
+                f"refund amount ${refund_amount:.2f} exceeds "
+                f"${REFUND_THRESHOLD_USD:.2f} threshold"
+            )
 
-    audit_entry = {
-        "step": "planner",
-        "action": "intent_detection",
-        "intent": intent,
-        PLANNED_ACTION_KEY: planned_action,
-        "order_id": order_id,
-        "refund_amount": refund_amount,
-        "requires_human_approval": requires_human_approval,
-        APPROVAL_REASON_KEY: approval_reason,
-        "user_text_excerpt": user_text[:200],
-    }
+    risk_level = _risk_for_refund(refund_amount, bool(escalation_hit))
+    audit_log = _log_step(
+        state.get("audit_log", []),
+        event_type="intent_detection",
+        step="planner",
+        action="intent_detection",
+        risk_level=risk_level,
+        intent=intent,
+        **{
+            PLANNED_ACTION_KEY: planned_action,
+            "order_id": order_id,
+            "refund_amount": refund_amount,
+            "requires_human_approval": requires_human_approval,
+            APPROVAL_REASON_KEY: approval_reason,
+            "user_text_excerpt": user_text[:200],
+            "policy_snippets": policy_snippets,
+        },
+    )
 
     return {
         "order_id": order_id,
         "refund_amount": refund_amount,
         "requires_human_approval": requires_human_approval,
-        "audit_log": _append_audit(state.get("audit_log", []), audit_entry),
+        "audit_log": audit_log,
     }
 
 
 def human_gate_node(state: AgentState) -> dict:
-    """
-    Pause for human approval when required.
-
-    Emits ACTION_REQUIRED message and interrupts until a human resumes with a decision.
-    """
+    """Pause for human approval when required."""
     planner_ctx = _get_planner_context(state)
     reason = planner_ctx.get(APPROVAL_REASON_KEY) or "high-risk request"
     pause_message = f"ACTION_REQUIRED: Human approval needed for {reason}. Waiting for input."
 
-    audit_log = _append_audit(
+    audit_log = _log_step(
         state.get("audit_log", []),
-        {
-            "step": "human_gate",
-            "action": "pause",
-            "reason": reason,
-            "message": pause_message,
-        },
+        event_type="human_gate_pause",
+        step="human_gate",
+        action="pause",
+        risk_level="high",
+        reason=reason,
+        message=pause_message,
     )
 
     human_decision = interrupt(
@@ -225,77 +228,137 @@ def human_gate_node(state: AgentState) -> dict:
         else pause_message
     )
 
+    audit_log = _log_step(
+        audit_log,
+        event_type="human_gate_resume",
+        step="human_gate",
+        action="resume",
+        risk_level="high" if not approved else "medium",
+        approved=approved,
+        human_decision=human_decision,
+        message=resolution_message,
+    )
+
     return {
         "messages": [AIMessage(content=resolution_message)],
         "requires_human_approval": not approved,
-        "audit_log": _append_audit(
-            audit_log,
-            {
-                "step": "human_gate",
-                "action": "resume",
-                "approved": approved,
-                "human_decision": human_decision,
-            },
-        ),
+        "audit_log": audit_log,
     }
 
 
 def tool_executor_node(state: AgentState) -> dict:
-    """
-    Execute mock tools when human approval is not required or has been granted.
-    """
+    """Execute support tools when human approval is not required or has been granted."""
     if state.get("requires_human_approval"):
-        audit_entry = {
-            "step": "tool_executor",
-            "action": "skipped",
-            "reason": "human approval still required",
-        }
+        audit_log = _log_step(
+            state.get("audit_log", []),
+            event_type="tool_skipped",
+            step="tool_executor",
+            action="skipped",
+            risk_level="medium",
+            reason="human approval still required",
+        )
         return {
             "messages": [AIMessage(content="Tool execution blocked: awaiting human approval.")],
-            "audit_log": _append_audit(state.get("audit_log", []), audit_entry),
+            "audit_log": audit_log,
         }
 
     planner_ctx = _get_planner_context(state)
     planned_action: PlannedAction = planner_ctx.get(PLANNED_ACTION_KEY, "none")
     order_id = state.get("order_id", "")
     refund_amount = state.get("refund_amount", 0.0)
+    user_text = _latest_user_text(state)
 
     tool_result: dict = {}
     response_message = "No automated action was required for this request."
+    audit_action = "none"
+    risk_level = "low"
 
-    if planned_action == "order_lookup":
-        tool_result = mock_order_lookup(order_id)
-        response_message = tool_result["message"]
-        audit_action = "order_lookup"
-    elif planned_action == "policy_check":
-        tool_result = mock_policy_check(order_id, refund_amount)
-        response_message = tool_result["message"]
-        audit_action = "policy_check"
-    elif planned_action == "refund":
-        policy_result = mock_policy_check(order_id, refund_amount)
-        if policy_result["eligible"]:
-            tool_result = mock_refund_tool(order_id, refund_amount)
+    try:
+        if planned_action == "order_lookup":
+            tool_result = check_order_status(order_id)
             response_message = tool_result["message"]
-            audit_action = "refund"
-        else:
-            tool_result = policy_result
-            response_message = policy_result["message"]
-            audit_action = "policy_check"
-    else:
-        audit_action = "none"
+            audit_action = "order_lookup"
+            risk_level = "low"
 
-    audit_entry = {
-        "step": "tool_executor",
-        "action": audit_action,
-        "planned_action": planned_action,
-        "order_id": order_id,
-        "refund_amount": refund_amount,
-        "tool_result": tool_result,
-    }
+        elif planned_action in ("policy_check", "refund"):
+            policy_snippets = retrieve_policy(user_text or f"refund order {order_id}")
+            policy_text = retrieve_policy_text(user_text or f"refund order {order_id}")
+
+            if refund_amount > REFUND_THRESHOLD_USD:
+                tool_result = {
+                    "policy_snippets": policy_snippets,
+                    "status": "manager_required",
+                    "message": (
+                        f"Refund of ${refund_amount:.2f} requires manager approval per policy. "
+                        f"Relevant policy:\n{policy_text}"
+                    ),
+                }
+                response_message = tool_result["message"]
+                audit_action = "policy_check"
+                risk_level = "high"
+            elif refund_amount > 0:
+                tool_result = apply_refund(order_id, refund_amount)
+                response_message = tool_result["message"]
+                audit_action = "refund"
+                risk_level = "medium"
+            else:
+                order_info = check_order_status(order_id)
+                if order_info.get("days_late", 0) >= 3 and order_info.get("total_usd", 0) <= REFUND_THRESHOLD_USD:
+                    credit_amount = min(10.0, order_info["total_usd"])
+                    tool_result = send_goodwill_credit(credit_amount)
+                    response_message = (
+                        f"{tool_result['message']} Policy applied:\n{policy_text}"
+                    )
+                    audit_action = "goodwill_credit"
+                else:
+                    tool_result = {
+                        "policy_snippets": policy_snippets,
+                        "order": order_info,
+                        "status": "policy_review",
+                    }
+                    response_message = (
+                        f"Policy review for order {order_id}:\n{policy_text}\n"
+                        f"Order status: {order_info['message']}"
+                    )
+                    audit_action = "policy_check"
+
+            log_event(
+                "policy_retrieval",
+                {
+                    "step": "tool_executor",
+                    "order_id": order_id,
+                    "policy_snippets": policy_snippets,
+                },
+                "medium",
+            )
+
+    except OrderNotFoundError:
+        response_message = f"Order {order_id or 'unknown'} was not found."
+        tool_result = {"error": "Not Found", "order_id": order_id}
+        audit_action = "order_not_found"
+        risk_level = "medium"
+    except ValueError as exc:
+        response_message = str(exc)
+        tool_result = {"error": str(exc), "order_id": order_id, "refund_amount": refund_amount}
+        audit_action = "refund_blocked"
+        risk_level = "high"
+
+    audit_log = _log_step(
+        state.get("audit_log", []),
+        event_type="tool_execution",
+        step="tool_executor",
+        action=audit_action,
+        risk_level=risk_level,
+        planned_action=planned_action,
+        order_id=order_id,
+        refund_amount=refund_amount,
+        tool_result=tool_result,
+        response_message=response_message,
+    )
 
     return {
         "messages": [AIMessage(content=response_message)],
-        "audit_log": _append_audit(state.get("audit_log", []), audit_entry),
+        "audit_log": audit_log,
     }
 
 
@@ -372,11 +435,7 @@ def invoke_agent(
     order_id: str = "",
     refund_amount: float = 0.0,
 ) -> dict:
-    """
-    Convenience wrapper to run the graph for a single user turn.
-
-    Returns the final state dict including messages and audit_log.
-    """
+    """Run the graph for a single user turn."""
     config = {"configurable": {"thread_id": thread_id}}
     initial_state: AgentState = {
         "messages": [HumanMessage(content=user_message)],

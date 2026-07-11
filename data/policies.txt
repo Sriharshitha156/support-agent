@@ -1,0 +1,8 @@
+Policy 1: Refunds under $10 are auto-approved for late orders.
+If an order arrived more than 3 days late, the customer may receive an automatic refund up to $10 without manager approval.
+
+Policy 2: Refunds over $10 require manager approval.
+Any refund request exceeding $10 must be reviewed and approved by a manager before processing. The agent must not auto-execute these refunds.
+
+Policy 3: Legal threats must be escalated immediately.
+If a customer mentions suing, lawyers, or formal legal complaints, escalate to a human agent immediately. Do not promise outcomes or process refunds autonomously.

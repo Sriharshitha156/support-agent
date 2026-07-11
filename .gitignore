@@ -27,3 +27,4 @@ Thumbs.db
 # Generated at runtime
 data/chroma_db/
 data/audit.log
+data/audit_log.json

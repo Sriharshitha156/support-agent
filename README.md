@@ -128,8 +128,9 @@ User message → Planner → [Human Gate | Tool Executor] → Response
 
 - Refund amount **> $10** → requires human approval; refund tool blocked until approved
 - Keywords **sue / lawyer / complaint** → requires human approval
-- Order status queries → `mock_order_lookup()`
-- Small refunds (≤ $10) → `mock_policy_check()` without human gate
+- Order status queries → `check_order_status()`
+- Small refunds (≤ $10) → `apply_refund()` after policy retrieval
+- Late orders (≥ 3 days) → `send_goodwill_credit()` when no amount specified
 
 **Usage example:**
 
@@ -137,13 +138,33 @@ User message → Planner → [Human Gate | Tool Executor] → Response
 from app.agent import invoke_agent, resume_agent
 
 # Normal flow
-result = invoke_agent("What is my order status for ORD-1001?", thread_id="session-1")
+result = invoke_agent("What is my order status for C1234?", thread_id="session-1")
 
 # High-value refund — pauses at human gate
-result = invoke_agent("Refund $25 for ORD-1001", thread_id="session-2")
+result = invoke_agent("Refund $25 for B9999", thread_id="session-2")
 if "__interrupt__" in result:
     resumed = resume_agent({"approved": True}, thread_id="session-2")
 ```
+
+### Step 4 — Supporting modules & real integrations ✅
+
+| Module | File | Description |
+|--------|------|-------------|
+| Mock orders | `data/mock_orders.py` | 5 fake orders (A4821 late, B9999 high-value, C1234 normal, +2 more); `lookup_order()` |
+| Support tools | `app/tools/support_tools.py` | `check_order_status`, `apply_refund` (≤ $10 only), `send_goodwill_credit` |
+| Policy RAG | `app/rag/policy_retriever.py` | `CharacterTextSplitter` + `InMemoryVectorStore` over `data/policies.txt` |
+| Governance | `app/governance/audit.py` | `log_event()` persists every agent step to `data/audit_log.json` |
+| Agent graph | `app/agent/graph.py` | Updated to call real tools, policy retriever, and audit logger |
+
+**Mock order scenarios:**
+
+| Order ID | Scenario |
+|----------|----------|
+| A4821 | Late delivery (5 days late) |
+| B9999 | High value ($500) |
+| C1234 | Normal shipped status |
+| D5678 | Processing |
+| E9012 | Cancelled |
 
 ---
 
@@ -151,12 +172,10 @@ if "__interrupt__" in result:
 
 | Step | Module | Status |
 |------|--------|--------|
-| 4 | Real tool implementations (`app/tools/`) | 🔲 Pending |
-| 5 | RAG pipeline (`app/rag/`) | 🔲 Pending |
-| 6 | Governance layer (`app/governance/`) | 🔲 Pending |
-| 7 | FastAPI backend (`app.py`) | 🔲 Pending |
-| 8 | Streamlit UI (`ui.py`) | 🔲 Pending |
-| 9 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
+| 4 | Supporting modules (tools, RAG, governance) | ✅ Done |
+| 5 | FastAPI backend (`app.py`) | 🔲 Pending |
+| 6 | Streamlit UI (`ui.py`) | 🔲 Pending |
+| 7 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
 
 ---
 
@@ -171,9 +190,10 @@ Current coverage:
 | Test file | What it covers |
 |-----------|----------------|
 | `test_agent.py` | LangGraph planner, human gate, tool executor, audit log |
-| `test_tools.py` | Tool layer (placeholder) |
-| `test_rag.py` | RAG pipeline (placeholder) |
-| `test_governance.py` | Governance layer (placeholder) |
+| `test_tools.py` | Mock order lookup |
+| `test_support_tools.py` | Support tools (refund limits, goodwill credit) |
+| `test_rag.py` | Policy retrieval |
+| `test_governance.py` | Audit file logging |
 | `test_api.py` | FastAPI endpoints (placeholder) |
 
 ---
