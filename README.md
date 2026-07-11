@@ -221,12 +221,13 @@ Run: `uvicorn app.main:app --reload`
 
 ### Step 7 — Streamlit UI ✅
 
-Standalone chat app (`streamlit run ui.py`) that imports the agent graph directly:
+Cyber-Security Operations Center (CSOC) Dashboard (`streamlit run ui.py`):
 
-- Chat interface with `st.chat_input`
-- Red **Human Approval Required** box when `WAITING_APPROVAL`
-- **Approve** / **Reject** buttons call `resume_human_gate()`
-- Sidebar **View Audit Log** for governance demo
+- **Enterprise Theme**: Sleek dark mode operations aesthetic with neon green (success), amber (warning), and pulsing red (critical alert) status indicators.
+- **Dynamic Tabs**: Divided into *Agent Communications* (active chat ops), *Live Terminal Logs* (scrolling server logs + JSON audit tree), and *Corporate Policies* (inline policy viewers).
+- **Execution Stages Simulation**: Simulates risk compliant check, RAG lookup, and graph planning steps visually with delay triggers to prove agent loop processing.
+- **Pulsing Human Gate Override Card**: Alerts compliance managers to manual override actions, featuring high-visibility approve/reject override triggers.
+- **Real-Time Log Feeds**: Sidebar and tab terminals display operational event logs as they occur.
 
 ### Step 8 — Evaluation suite ✅
 
