@@ -68,7 +68,7 @@ def get_embeddings_model() -> Embeddings:
         if not base_url:
             base_url = "https://models.inference.ai.azure.com"
             
-    if openai_key and openai_key.lower() != "offline":
+    if openai_key:
         model_name = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
         try:
             model = OpenAIEmbeddings(
@@ -81,8 +81,7 @@ def get_embeddings_model() -> Embeddings:
             return model
         except Exception as exc:
             # Graceful fallback on rate limit/insufficient quota errors
-            if openai_key.lower() != "offline":
-                print(f"Embeddings API verification failed (falling back): {exc}")
+            print(f"Embeddings API verification failed (falling back): {exc}")
     return HashingEmbeddings()
 
 

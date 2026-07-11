@@ -208,7 +208,7 @@ def _get_llm() -> ChatOpenAI | None:
         if not base_url:
             base_url = "https://models.inference.ai.azure.com"
             
-    if openai_key and openai_key.lower() != "offline":
+    if openai_key:
         model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         try:
             # We set max_retries=0 to fail fast if the key is invalid
