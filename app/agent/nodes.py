@@ -192,15 +192,23 @@ class AnalysisPlan(BaseModel):
 
 
 def _get_llm() -> ChatOpenAI | None:
-    openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("GITHUB_TOKEN")
+    g_token = os.getenv("GITHUB_TOKEN")
+    o_key = os.getenv("OPENAI_API_KEY")
+    
+    openai_key = None
+    if g_token and not g_token.startswith("gh-your-github-token"):
+        openai_key = g_token
+    elif o_key and not o_key.startswith("sk-your-openai-api-key"):
+        openai_key = o_key
+        
     base_url = os.getenv("OPENAI_API_BASE")
     
     # Auto-detect GitHub Models endpoint if a GitHub PAT is used
-    if openai_key and (openai_key.startswith("ghp_") or openai_key.startswith("github_pat_") or os.getenv("GITHUB_TOKEN")):
+    if openai_key and (openai_key.startswith("ghp_") or openai_key.startswith("github_pat_") or g_token):
         if not base_url:
             base_url = "https://models.inference.ai.azure.com"
             
-    if openai_key and not openai_key.startswith("sk-your-openai-api-key") and not openai_key.startswith("gh-your-github-token"):
+    if openai_key:
         model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         try:
             # We set max_retries=0 to fail fast if the key is invalid
