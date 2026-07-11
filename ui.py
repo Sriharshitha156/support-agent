@@ -551,7 +551,7 @@ def _run_chat_turn(user_message: str) -> None:
     st.session_state.stats["avg_latency"] = int((st.session_state.stats["avg_latency"] * 9 + (t_end - t_start) * 1000) / 10)
     
     if "refund" in user_message.lower():
-        record_tool_call("Order Refund", "COMPLETED" if amount := _extract_refund_amount(user_message) <= 10 else "ESCALATED", f"{t_end-t_start:.2f}s")
+        record_tool_call("Order Refund", "COMPLETED" if _extract_refund_amount(user_message) <= 10 else "ESCALATED", f"{t_end-t_start:.2f}s")
     else:
         record_tool_call("Order Status Lookup", "COMPLETED", f"{t_end-t_start:.2f}s")
     time.sleep(0.6)
