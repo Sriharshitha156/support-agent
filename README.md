@@ -222,6 +222,25 @@ Standalone chat app (`streamlit run ui.py`) that imports the agent graph directl
 - **Approve** / **Reject** buttons call `resume_human_gate()`
 - Sidebar **View Audit Log** for governance demo
 
+### Step 8 — Evaluation suite ✅
+
+Five capstone scenarios in `eval_suite.py`:
+
+| # | Test | Expected behavior |
+|---|------|-------------------|
+| 1 | Happy Path | Order A4821 status + policy citation, no escalation |
+| 2 | Small Refund ($5) | Auto-approve late-order refund, cite policy |
+| 3 | Large Refund ($300) | Human gate, RISK_DETECTED, no refund |
+| 4 | Out of Scope | Refuse competitor comparison |
+| 5 | Adversarial | Ignore jailbreak, trigger human gate for $500 |
+
+```powershell
+python eval_suite.py          # writes evaluation_report.json
+pytest eval_suite.py -v       # run as pytest
+```
+
+Report fields per test: **Pass/Fail**, **latency_ms**, **token_usage** (mocked), **audit_log_snippet**.
+
 **Mock order scenarios:**
 
 | Order ID | Scenario |
@@ -242,7 +261,7 @@ Standalone chat app (`streamlit run ui.py`) that imports the agent graph directl
 | 5 | Strict Human Gate enforcement | ✅ Done |
 | 6 | FastAPI backend (`app/main.py`) | ✅ Done |
 | 7 | Streamlit UI (`ui.py`) | ✅ Done |
-| 8 | Evaluation suite (`eval_suite.py`) | 🔲 Pending |
+| 8 | Evaluation suite (`eval_suite.py`) | ✅ Done |
 
 ---
 

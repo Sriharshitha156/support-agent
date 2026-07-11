@@ -33,7 +33,7 @@ from data.mock_orders import OrderNotFoundError
 # Constants
 # ---------------------------------------------------------------------------
 
-PlannedAction = Literal["none", "order_lookup", "policy_check", "refund"]
+PlannedAction = Literal["none", "order_lookup", "policy_check", "refund", "refuse_out_of_scope"]
 RISK_SCAN_KEYWORDS = ("sue", "lawyer", "legal", "refund", "compensation")
 LEGAL_KEYWORDS = ("sue", "lawyer", "legal")
 REFUND_REQUEST_KEYWORDS = ("refund", "return", "compensation")
@@ -53,6 +53,7 @@ REJECTION_MESSAGE = (
 
 PLANNED_ACTION_KEY = "planned_action"
 APPROVAL_REASON_KEY = "approval_reason"
+OUT_OF_SCOPE_KEYWORDS = ("competitor", "who is better", "better than", "compare you to")
 
 
 # ---------------------------------------------------------------------------
@@ -114,11 +115,20 @@ def _extract_refund_amount(text: str) -> float:
 
 def _detect_intent(text: str) -> str:
     lowered = text.lower()
+    if _is_out_of_scope(text):
+        return "out_of_scope"
     if any(keyword in lowered for keyword in ORDER_STATUS_KEYWORDS) or "status" in lowered:
+        return "order_status"
+    if "where is" in lowered and _extract_order_id(text):
         return "order_status"
     if any(keyword in lowered for keyword in REFUND_REQUEST_KEYWORDS):
         return "refund"
     return "general"
+
+
+def _is_out_of_scope(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in OUT_OF_SCOPE_KEYWORDS)
 
 
 def _scan_risk_keywords(text: str) -> list[str]:
@@ -244,8 +254,11 @@ def planner_node(state: AgentState) -> dict:
     approval_reason = gate_response.get("reason", "")
     policy_snippets: list[dict] = []
 
-    if intent == "order_status":
+    if intent == "out_of_scope":
+        planned_action = "refuse_out_of_scope"
+    elif intent == "order_status":
         planned_action = "order_lookup"
+        policy_snippets = retrieve_policy(user_text or f"order status {order_id}")
     elif intent == "refund":
         planned_action = "policy_check" if not requires_human_approval else "refund"
         policy_snippets = retrieve_policy(user_text)
@@ -394,9 +407,23 @@ def tool_executor_node(state: AgentState) -> dict:
 
     try:
         if planned_action == "order_lookup":
+            policy_text = retrieve_policy_text(user_text or f"order status {order_id}")
             tool_result = check_order_status(order_id)
-            response_message = tool_result["message"]
+            response_message = f"{tool_result['message']}\n\nRelevant policy:\n{policy_text}"
             audit_action = "order_lookup"
+            log_event(
+                "policy_retrieval",
+                {"step": "tool_executor", "order_id": order_id, "context": "order_status"},
+                "low",
+            )
+
+        elif planned_action == "refuse_out_of_scope":
+            response_message = (
+                "I can only assist with order status, refunds, and company support policies. "
+                "I cannot compare our service to competitors or answer off-topic requests."
+            )
+            tool_result = {"status": "refused", "reason": "out_of_scope"}
+            audit_action = "refuse_out_of_scope"
 
         elif planned_action in ("policy_check", "refund"):
             policy_snippets = retrieve_policy(user_text or f"refund order {order_id}")
@@ -488,7 +515,12 @@ def route_after_planner(state: AgentState) -> str:
     if state.get("requires_human_approval"):
         return "human_gate"
     planner_ctx = _get_planner_context(state)
-    if planner_ctx.get(PLANNED_ACTION_KEY) in ("order_lookup", "policy_check", "refund"):
+    if planner_ctx.get(PLANNED_ACTION_KEY) in (
+        "order_lookup",
+        "policy_check",
+        "refund",
+        "refuse_out_of_scope",
+    ):
         return "tool_executor"
     return END
 
@@ -499,7 +531,12 @@ def route_after_human_gate(state: AgentState) -> str:
     if state.get("requires_human_approval"):
         return END
     planner_ctx = _get_planner_context(state)
-    if planner_ctx.get(PLANNED_ACTION_KEY) in ("order_lookup", "policy_check", "refund"):
+    if planner_ctx.get(PLANNED_ACTION_KEY) in (
+        "order_lookup",
+        "policy_check",
+        "refund",
+        "refuse_out_of_scope",
+    ):
         return "tool_executor"
     return END
 

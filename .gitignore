@@ -28,3 +28,4 @@ Thumbs.db
 data/chroma_db/
 data/audit.log
 data/audit_log.json
+evaluation_report.json
