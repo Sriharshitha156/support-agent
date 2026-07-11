@@ -188,7 +188,9 @@ if result.get("gate_response", {}).get("type") == "WAITING_APPROVAL":
 |--------|------|-------------|
 | Mock orders | `data/mock_orders.py` | 5 fake orders (A4821 late, B9999 high-value, C1234 normal, +2 more); `lookup_order()` |
 | Support tools | `app/tools/support_tools.py` | `check_order_status`, `apply_refund` (≤ $10 only), `send_goodwill_credit` |
-| Policy RAG | `app/rag/policy_retriever.py` | `CharacterTextSplitter` + `InMemoryVectorStore` over `data/policies.txt` |
+| Policy RAG | `app/rag/policy_retriever.py` | Query policies from ChromaDB with self-healing ingestion support |
+| Vector Store | `app/rag/vectorstore.py` | Persistent ChromaDB collection wrapper (API-key check & `HashingEmbeddings` offline fallback) |
+| Ingestion | `app/rag/ingestion.py` | Pipeline loading/chunking docs from `data/policies/` and `policies.txt` to ChromaDB |
 | Governance | `app/governance/audit.py` | `log_event()` persists every agent step to `data/audit_log.json` |
 | Agent graph | `app/agent/graph.py` | Updated to call real tools, policy retriever, and audit logger |
 
