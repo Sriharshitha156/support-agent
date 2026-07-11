@@ -1,0 +1,22 @@
+{
+  "orders": [
+    {
+      "order_id": "ORD-1001",
+      "customer_id": "CUST-001",
+      "status": "delivered",
+      "total_usd": 49.99,
+      "items": [{"sku": "WIDGET-A", "qty": 1, "price_usd": 49.99}],
+      "delivered_at": "2026-06-01T10:00:00Z",
+      "refund_eligible": true
+    },
+    {
+      "order_id": "ORD-1002",
+      "customer_id": "CUST-002",
+      "status": "shipped",
+      "total_usd": 1299.00,
+      "items": [{"sku": "LAPTOP-X", "qty": 1, "price_usd": 1299.00}],
+      "shipped_at": "2026-07-08T14:30:00Z",
+      "refund_eligible": false
+    }
+  ]
+}

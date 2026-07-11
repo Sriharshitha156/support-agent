@@ -11,6 +11,7 @@ build/
 # Environment & secrets
 .env
 .env.*
+!.env.example
 *.pem
 credentials.json
 
@@ -22,3 +23,7 @@ credentials.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated at runtime
+data/chroma_db/
+data/audit.log
