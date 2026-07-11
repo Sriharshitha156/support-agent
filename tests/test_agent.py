@@ -132,8 +132,8 @@ def test_apply_refund_not_called_when_human_approval_required():
         },
     }
 
-    with patch("app.agent.graph.apply_refund") as mock_refund:
-        from app.agent.graph import tool_executor_node
+    with patch("app.agent.nodes.apply_refund") as mock_refund:
+        from app.agent.nodes import tool_executor_node
 
         result = tool_executor_node(state)
 
