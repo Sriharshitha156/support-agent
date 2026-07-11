@@ -1,0 +1,17 @@
+---
+description: Auto-commit and push changes to GitHub after completing work
+alwaysApply: true
+---
+
+# Git Sync to GitHub
+
+Remote: `https://github.com/Sriharshitha156/support-agent.git`
+
+After making code or project file changes, **always** commit and push:
+
+1. Run `git status` and `git diff` to review changes.
+2. Stage relevant files (never `venv/`, `.env`, or other secrets).
+3. Commit with a clear message describing **why** the change was made.
+4. Push to `origin` on the current branch (`git push -u origin HEAD` if no upstream yet).
+
+Do this at the end of each task that modifies the repo. Skip only if there are no changes to commit.
