@@ -15,5 +15,6 @@ After making code or project file changes, **always** commit and push:
 4. **Never** add `Co-authored-by: Cursor` or any Cursor contributor trailer to commits.
 5. Use `git commit-tree` via a script if the environment auto-adds Cursor co-author trailers.
 6. Push to `origin` on the current branch (`git push -u origin HEAD` if no upstream yet).
+7. Update `README.md` **Implementation Progress** and **What's Next** sections when a milestone is completed.
 
 Do this at the end of each task that modifies the repo. Skip only if there are no changes to commit.
