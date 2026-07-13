@@ -33,7 +33,7 @@ Here is what each file in the repository does:
 ```
 support-agent/
 ├── app.py                      # FastAPI entrypoint (imports backend app)
-├── ui.py                       # Standalone Streamlit chatbot frontend
+├── ui.py                       # Stateful AI Operations Command Center (live graph path, inline overrides, diagnostics)
 ├── eval_suite.py               # Evaluation test runner (generates report)
 ├── evaluation_report.json      # Output log containing latency and logs of the 5 test cases
 ├── requirements.txt            # Python dependencies (LangGraph, FastAPI, ChromaDB, etc.)

@@ -224,11 +224,12 @@ Run: `uvicorn app.main:app --reload`
 Futuristic AI Mission Control Dashboard (`streamlit run ui.py`):
 
 - **Premium HUD Aesthetics**: Deep slate/black backdrop theme with glassmorphic cards (`backdrop-filter blur`), gradient highlights, and a modern layout inspired by OpenAI Operator and Palantir Foundry.
-- **Dynamic Agent Workflow Graph**: Rendered as an SVG graph showing the real-time node path (`INGRESS` $\rightarrow$ `PREPROCESS` $\rightarrow$ `PLANNER` $\rightarrow$ `POLICY RAG` $\rightarrow$ `HUMAN GATE` $\rightarrow$ `TOOL EXEC` $\rightarrow$ `COMPLIANCE` $\rightarrow$ `EGRESS`) with dynamic neon-glowing filters and state-active indicators.
-- **Supervisor Agent Net Panel**: Displays the live statuses of all supervisor nodes in the sidebar (Support, Compliance, Risk, Research, and Finance Agents) with visual breathing badges (`idle`, `thinking`, `running`, `waiting`).
-- **Live Tool Calls Stream**: Monospace terminal panel showing real-time timestamps, actions, status results, and execution duration for DB lookups, vector searches, and system updates.
-- **Manager Override Queue**: Pulse-red alert cards that isolate human override decisions (APPROVE / REJECT) to resume or block tool execution paths.
-- **Live Metrics HUD**: Tracks Tasks Completed, Average Latency, Tool Success Rate, Human Escalation totals, and execution costs in a top operations header.
+- **Real-Time Live Workflow Path & Badges**: SVG path nodes light up and animate in real time as the pipeline runs, showing active supervisor agent badges (`IDLE`, `ACTIVE`, `WAITING`, `ESCALATED`) changing dynamically in the left sidebar as tasks are routed.
+- **Supervisor Agent Net Panel**: Displays the live statuses and task/reasoning parameters of all supervisor nodes in the sidebar (Support, Compliance, Risk, Research, and Finance Agents) in expanding drawers.
+- **Live Tool Calls Stream & Diagnostics HUD**: Monospace terminal panel showing real-time timestamps, actions, status results, and execution duration for DB lookups, vector searches, and system updates.
+- **Fail-Safe Override Controls**: A pulse-red manager override warning panel displaying recommended actions and inline controls (APPROVE / REJECT) alongside Streamlit's native `@st.dialog` modal.
+- **Interactive Structured Diagnostics Tabs**: Overhauled bottom console tabs—particularly the **📜 Audit Log** and **🧠 Reasoning Trace**—replacing raw JSON logs with beautifully structured expansion cards, risk category filters, and step-by-step reasoning layouts.
+- **Live Metrics HUD**: Tracks Resolutions Automated, Average Response Latency, Citation Accuracy, Pending Escalations, and Saved Operating Cost in a top operations header.
 
 ### Step 8 — Evaluation suite ✅
 
