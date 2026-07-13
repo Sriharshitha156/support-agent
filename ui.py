@@ -1305,13 +1305,22 @@ def _run_pipeline_simulation(user_message: str, sidebar_placeholder, workflow_pl
         record_tool_call("Order Status Lookup", "COMPLETED", f"{t_end-t_start:.2f}s")
     
     # Trigger gate block
-    if sdata["risk"] in ("HIGH", "CRITICAL") and sdata["scenario"] in ("scenario3", "scenario5"):
+    payload = format_agent_result(state)
+    is_gate_triggered = (sdata["scenario"] in ("scenario3", "scenario5")) or (payload["status"] == "WAITING_APPROVAL")
+    
+    if is_gate_triggered:
         st.session_state.current_stage = "gate"
         st.session_state.awaiting_approval = True
-        st.session_state.gate_reason = f"High value transaction of ${sdata['refund_amount']:.2f} requires override." if sdata["scenario"] == "scenario3" else "Prompt injection attempt detected."
-        st.session_state.risk_level = sdata["risk"]
-        st.session_state.policy_trigger = "Refund Policy §5.1" if sdata["scenario"] == "scenario3" else "AI Safety Policy §8.2"
-        st.session_state.recommended_action = "Escalate to Operations Queue" if sdata["scenario"] == "scenario3" else "Lock Account & Security Escalate"
+        
+        # Pull gate reason from payload or scenario data
+        gate_reason = payload.get("gate_response", {}).get("reason")
+        if not gate_reason:
+            gate_reason = f"High value transaction of ${sdata['refund_amount']:.2f} requires override." if sdata["refund_amount"] > 10 else "High value refund or legal threat detected."
+            
+        st.session_state.gate_reason = gate_reason
+        st.session_state.risk_level = sdata["risk"] if sdata["risk"] != "LOW" else "HIGH"
+        st.session_state.policy_trigger = "Refund Policy §5.1" if sdata["refund_amount"] > 10 else "AI Safety Policy §8.2"
+        st.session_state.recommended_action = "Escalate to Operations Queue" if sdata["refund_amount"] > 10 else "Lock Account & Security Escalate"
         st.session_state.stats["pending_escalations"] = 1
         
         log_to_terminal("GOVERNANCE", f"Escalated case to manager: {st.session_state.gate_reason}", "WARN")
@@ -1326,7 +1335,6 @@ def _run_pipeline_simulation(user_message: str, sidebar_placeholder, workflow_pl
             
         response = sdata["response"]
         if not response:
-            payload = format_agent_result(state)
             response = payload["response"]
         
         _append_message("assistant", response)
@@ -1863,18 +1871,29 @@ if st.session_state.awaiting_approval:
         st.markdown("<h4 style='font-family: monospace;'>Escalation Authorization Panel</h4>", unsafe_allow_html=True)
         st.markdown(
             f"""
-            <div class="escalation-panel">
+            <div class="escalation-panel" style="margin-bottom: 15px;">
                 <h4 style="color: #ef4444; margin-top: 0; font-family: monospace;">⚠️ OVERRIDE REQUIRED</h4>
                 <p style="color: #f3f4f6; margin-bottom: 12px; font-size:0.85rem;">
                     <strong>Trigger:</strong> {st.session_state.policy_trigger} ({st.session_state.gate_reason})
                 </p>
-                <p style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 15px;">
+                <p style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 12px;">
                     Autonomous tools are blocked. Action requires manual supervisor review.
                 </p>
             </div>
             """,
             unsafe_allow_html=True
         )
+        
+        # Render the approval buttons directly under the warning block!
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("AUTHORIZE TRANSACTION OVERRIDE", use_container_width=True, type="primary", key="inline_approve"):
+                _run_approval("approve")
+                st.rerun()
+        with btn_col2:
+            if st.button("REJECT & ESCALATE TICKET OVERRIDE", use_container_width=True, key="inline_reject"):
+                _run_approval("reject")
+                st.rerun()
 
 # ---------------------------------------------------------------------------
 # BOTTOM PANEL: Diagnostics & Console Tabs
