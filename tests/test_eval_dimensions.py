@@ -537,7 +537,8 @@ def test_dim8_response_no_other_order_ids():
 
 def run_dimension_report() -> dict:
     """Run all dimension tests and build a JSON report."""
-    import tests.test_eval_dimensions as mod
+    import sys
+    mod = sys.modules[__name__]
 
     test_funcs = sorted([
         (name, func)
