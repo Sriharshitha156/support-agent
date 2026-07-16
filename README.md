@@ -10,17 +10,53 @@ A capstone project that builds an AI-powered customer support agent using **Lang
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Agent orchestration | LangGraph, LangChain |
-| API backend | FastAPI, Uvicorn |
-| Frontend | Streamlit |
-| RAG / vector store | ChromaDB (Chroma) |
-| LLM | GPT-4o-mini (GitHub Models / OpenRouter / OpenAI) |
-| Embeddings | Google Gemini (primary), OpenAI, GitHub Models, local HashingEmbeddings |
-| Validation | Pydantic |
-| Unit / integration tests | Pytest |
-| E2E browser tests | Playwright |
+| Layer | Technology | Version | Purpose |
+|-------|------------|---------|---------|
+| **Runtime** | Python | 3.11.9 | Language runtime |
+| **Agent orchestration** | LangGraph | >= 0.2.0 | Stateful agent graph, human-in-the-loop interrupts |
+| | LangChain | >= 0.3.0 | LLM abstractions, tool interfaces, document loaders |
+| | LangChain OpenAI | >= 0.2.0 | `ChatOpenAI` for LLM calls (GitHub Models compatible) |
+| | LangChain Chroma | >= 0.1.0 | ChromaDB vector store integration |
+| | LangChain Google GenAI | >= 2.0.0 | Google Gemini embeddings |
+| **API backend** | FastAPI | >= 0.115.0 | REST endpoints: `/chat`, `/approve`, `/get_audit_log`, `/health` |
+| | Uvicorn | >= 0.32.0 | ASGI server |
+| **Frontend** | Streamlit | >= 1.40.0 | AI Operations Command Center dashboard |
+| **LLM** | GPT-4o-mini | default | Agent reasoning (intent detection, response generation) |
+| | **Provider priority** | GitHub Models → OpenAI → OpenRouter | Auto-detected from API keys |
+| **Embeddings** | Google Gemini (gemini-embedding-001) | free tier | Primary embedding (1500 req/day) |
+| | OpenAI text-embedding-3-small | fallback | Secondary embedding via OpenAI or OpenRouter |
+| | **Provider priority** | Gemini → Custom → GitHub Models → OpenAI → HashingEmbeddings | Auto-detected, probe-tested |
+| **Vector store** | ChromaDB (Chroma) | >= 0.5.0 | Persistent policy document storage + similarity search |
+| **Validation** | Pydantic | >= 2.9.0 | Data models, structured tool outputs |
+| | Pydantic Settings | >= 2.6.0 | Environment variable configuration |
+| **Data** | python-dotenv | >= 1.0.0 | `.env` file loading |
+| **Deployment** | Render | free tier | Cloud hosting (Oregon region) |
+| **Testing** | Pytest | >= 8.3.0 | Unit, integration, and evaluation tests |
+| | Pytest Asyncio | >= 0.24.0 | Async test support |
+| | httpx | >= 0.27.0 | FastAPI test client |
+| | Playwright | external | E2E browser tests (Chromium) |
+
+### LLM Provider Fallback Chain
+
+```
+GITHUB_TOKEN → https://models.inference.ai.azure.com (GitHub Models, free)
+OPENAI_API_KEY (OpenAI) → https://api.openai.com/v1
+OPENAI_API_KEY (OpenRouter) → https://openrouter.ai/api/v1
+```
+
+The agent auto-detects the provider from the API key prefix (`ghp_`/`github_pat_` → GitHub Models, `sk-or-` → OpenRouter, `sk-` → OpenAI). Temperature is set to `0.0` for deterministic responses.
+
+### Embedding Provider Fallback Chain
+
+```
+GOOGLE_API_KEY   → Google Gemini gemini-embedding-001  (free, 1500 req/day)
+EMBEDDING_API_BASE + OPENAI_API_KEY → Custom endpoint (e.g. OpenRouter)
+GITHUB_TOKEN     → GitHub Models text-embedding-3-small
+OPENAI_API_KEY   → OpenAI text-embedding-3-small
+(none)           → Local HashingEmbeddings (128-dim, Adler32 hash, L2-normalized)
+```
+
+Each provider is probe-tested at startup (`embed_query("probe")`) before being selected. The local `HashingEmbeddings` fallback uses feature hashing (Adler32) for offline/testing environments.
 
 ---
 
@@ -68,7 +104,8 @@ support-agent/
 │   ├── test_rag.py             # Policy retrieval tests
 │   ├── test_governance.py      # Audit logging tests
 │   ├── test_api.py             # FastAPI endpoint tests
-│   └── test_e2e.py             # Playwright E2E browser tests (14 cases)
+│   ├── test_e2e.py             # Playwright E2E browser tests (14 cases)
+│   └── test_eval_dimensions.py # 8-dimension evaluation (54 tests)
 └── data/
     ├── mock_orders.py          # 16 mock orders + lookup_order()
     ├── policies.txt            # Flat text policies for RAG
@@ -85,6 +122,113 @@ support-agent/
     │   ├── complaint_policy.md
     │   └── product_safety_policy.md
     └── audit_log.json          # Runtime-generated audit trail
+```
+
+---
+
+## File-by-File Guide
+
+### Core Files
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `app.py` | - | FastAPI backend entry point (imports `app.main`) |
+| `ui.py` | ~2075 | Streamlit AI Operations Command Center dashboard — HUD aesthetic, real-time workflow graph, live metrics, agent net panel, tool calls diagnostics, audit log viewer, manager override controls |
+| `eval_suite.py` | ~200 | 5 capstone evaluation scenarios with pass/fail, latency, and audit logging |
+| `requirements.txt` | 26 | All Python dependencies with version constraints |
+| `pytest.ini` | - | Pytest config (`pythonpath = .`) |
+| `render.yaml` | 48 | Render deployment config for both UI and API services |
+| `.env.example` | 45 | Environment variable template with all options documented |
+| `setup.ps1` / `setup.sh` | - | Cross-platform virtual environment setup scripts |
+| `PROJECT_EXPLAINED.txt` | ~870 | Full project documentation (10 sections) |
+
+### Agent Module — `app/agent/`
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `state.py` | ~40 | `AgentState` TypedDict schema — keys: `messages`, `order_id`, `refund_amount`, `requires_human_approval`, `audit_log`, `planned_action`, `policy_context` |
+| `nodes.py` | ~628 | All graph node functions: `preprocess_node` (risk scan, keyword routing), `planner_node` (LLM intent detection with regex fallback), `human_gate_node` (interrupt for approval), `tool_executor_node` (runs tools based on planned action), `response_node` (final answer generation). Contains `_get_llm()` with provider auto-detection, `PlannedAction` literal type, regex-based intent classifier |
+| `graph.py` | ~150 | LangGraph `StateGraph` definition, routing logic (preprocess → planner → human_gate/tool_executor → response), compilation with `MemorySaver` checkpointer, `invoke_agent()` and `resume_human_gate()` helpers |
+
+### Tools — `app/tools/`
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `support_tools.py` | ~86 | `check_order_status()`, `apply_refund()` (≤ $10 auto-approve), `send_goodwill_credit()`. Constants: `MAX_AUTO_REFUND_USD = 10.0` |
+| `order_lookup.py` | ~60 | `StructuredOrderLookup` — Pydantic tool for JSON order lookup with ownership validation, legacy fallback to `mock_orders.json` |
+| `refund_tool.py` | ~70 | `StructuredRefundTool` — Pydantic tool validating refund window (30 days), amount limits, and eligibility before processing |
+| `human_gate.py` | ~50 | `StructuredHumanGate` — escalation ticket generator, creates structured ticket with reason, timestamp, and priority |
+
+### RAG / Vector Store — `app/rag/`
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `vectorstore.py` | ~172 | ChromaDB persistent collection, `HashingEmbeddings` class (Adler32 feature hashing, 128-dim, L2-normalized), `get_embeddings_model()` with 5-provider fallback chain, `get_vectorstore()` for collection access |
+| `policy_retriever.py` | ~80 | `retrieve_policy()` — similarity search with category/date metadata filters, `retrieve_policy_text()` — joins retrieved snippets into a single string |
+| `ingestion.py` | ~60 | Loads markdown files from `data/policies/`, chunksing via `RecursiveCharacterTextSplitter`, upserts into ChromaDB collection |
+
+### Governance — `app/governance/`
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `audit.py` | ~40 | `log_event()` — appends structured JSON entries (timestamp, step, event_type, details) to `data/audit_log.json` |
+| `refusal.py` | ~60 | `check_pii_exposure()` — regex detection of credit cards, SSNs, emails; `verify_compliance()` — blocks PII leaks, unauthorized refunds, and unapproved tool calls |
+
+### Data — `data/`
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `mock_orders.py` | ~180 | 16 mock orders with `lookup_order()` function, `OrderNotFoundError` exception |
+| `policies.txt` | - | Flat text policies for legacy RAG fallback |
+| `policies/refund_policy.md` | - | Refund eligibility, 30-day window, $500+ approval required |
+| `policies/shipping_policy.md` | - | Shipping options, tracking, lost packages |
+| `policies/privacy_policy.md` | - | Data handling, PII protection, agent access limits |
+| `policies/warranty_policy.md` | - | Warranty coverage, claim process |
+| `policies/return_policy.md` | - | Return eligibility, conditions, timeframes |
+| `policies/account_security_policy.md` | - | Account verification, fraud protection |
+| `policies/loyalty_policy.md` | - | Loyalty program rules, rewards |
+| `policies/complaint_policy.md` | - | Complaint handling, escalation |
+| `policies/product_safety_policy.md` | - | Product safety, recalls, incident reporting |
+
+### Tests — `tests/`
+
+| File | Tests | Description |
+|------|-------|-------------|
+| `conftest.py` | - | Shared pytest fixtures (agent state, mock orders, temporary audit files) |
+| `test_agent.py` | 9 | LangGraph integration — full pipeline: order lookup, small/large refunds, legal triggers, human gate, rejection, audit logging |
+| `test_tools.py` | 5 | Order lookup — known orders, not-found, structured tools (lookup, refund, escalation) |
+| `test_support_tools.py` | 5 | Support tool functions — status check, refund limits, goodwill credit |
+| `test_rag.py` | 3 | Policy retrieval — refund, legal escalation, text joins |
+| `test_governance.py` | 6 | Audit logging, PII detection, compliance verification |
+| `test_api.py` | 6 | FastAPI endpoints — health, chat, approve, audit log |
+| `test_e2e.py` | 14 | Playwright browser tests — page load, chat input, order queries, refund flows, UI elements |
+| `test_eval_dimensions.py` | 54 | 8-dimension evaluation — intent classification, order accuracy, refund governance, RAG retrieval, risk detection, human-in-the-loop, out-of-scope refusal, compliance |
+
+---
+
+## Deployment
+
+### Render (Production)
+
+Configured via `render.yaml` with two services:
+
+| Service | Type | Region | Plan | URL |
+|---------|------|--------|------|-----|
+| `support-agent-ui` | Web Service | Oregon | Free | [support-agent-ui.onrender.com](https://support-agent-ui.onrender.com) |
+| `support-agent-api` | Web Service | Oregon | Free | Not yet deployed |
+
+**UI start command:** `streamlit run ui.py --server.port $PORT --server.address 0.0.0.0 --server.headless true`
+
+**API start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+Both services share the same `requirements.txt` and env vars (`GITHUB_TOKEN`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`).
+
+### Local Development
+
+```powershell
+.\venv\Scripts\Activate.ps1
+streamlit run ui.py              # Streamlit UI at http://localhost:8501
+uvicorn app.main:app --reload    # FastAPI at http://localhost:8000/docs
 ```
 
 ---
@@ -559,7 +703,10 @@ See [`.env.example`](.env.example) for the full list:
 | `CHROMA_PERSIST_DIR` | No | ChromaDB storage path (default: `./data/chroma_db`) |
 | `EMBEDDING_MODEL` | No | Embedding model name (default: `text-embedding-3-small`) |
 | `OPENAI_MODEL` | No | LLM model name (default: `gpt-4o-mini`) |
+| `OPENAI_API_BASE` | No | Custom API base URL (auto-detected for GitHub Models / OpenRouter) |
+| `EMBEDDING_API_BASE` | No | Custom embedding API base URL (e.g. OpenRouter) |
 | `AUDIT_LOG_PATH` | No | Audit log file path (default: `data/audit_log.json`) |
+| `MAX_REFUND_AMOUNT_USD` | No | Maximum refund requiring human approval (default: `500.00`) |
 
 ---
 
