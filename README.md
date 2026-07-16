@@ -13,9 +13,12 @@ A capstone project that builds an AI-powered customer support agent using **Lang
 | Agent orchestration | LangGraph, LangChain |
 | API backend | FastAPI, Uvicorn |
 | Frontend | Streamlit |
-| RAG / vector store | ChromaDB |
+| RAG / vector store | ChromaDB (Chroma) |
+| LLM | GPT-4o-mini (GitHub Models / OpenRouter / OpenAI) |
+| Embeddings | Google Gemini (primary), OpenAI, GitHub Models, local HashingEmbeddings |
 | Validation | Pydantic |
-| Testing | Pytest |
+| Unit / integration tests | Pytest |
+| E2E browser tests | Playwright |
 
 ---
 
@@ -23,46 +26,63 @@ A capstone project that builds an AI-powered customer support agent using **Lang
 
 ```
 support-agent/
-├── app.py                      # FastAPI backend (placeholder)
-├── ui.py                       # Streamlit frontend (placeholder)
-├── eval_suite.py               # Evaluation script (placeholder)
+├── app.py                      # FastAPI backend entry point
+├── ui.py                       # Streamlit "AI Operations Command Center" dashboard
+├── eval_suite.py               # Evaluation suite (5 capstone scenarios)
+├── PROJECT_EXPLAINED.txt       # Comprehensive project documentation
 ├── requirements.txt            # Python dependencies
 ├── pytest.ini                  # Pytest config (pythonpath)
 ├── setup.ps1 / setup.sh        # Virtual environment setup
 ├── .env.example                # Environment variable template
 ├── app/
+│   ├── __init__.py
+│   ├── main.py                 # FastAPI app with /chat, /approve, /get_audit_log, /health
 │   ├── agent/
-│   │   ├── state.py            # AgentState schema
-│   │   ├── nodes.py            # Node placeholders
-│   │   └── graph.py            # LangGraph planner, human gate, tool executor
+│   │   ├── __init__.py
+│   │   ├── state.py            # AgentState TypedDict schema
+│   │   ├── nodes.py            # preprocess, planner, human_gate, tool_executor nodes
+│   │   └── graph.py            # LangGraph StateGraph, routing, compilation
 │   ├── tools/
-│   │   ├── support_tools.py    # check_order_status, apply_refund, goodwill credit
-│   │   ├── order_lookup.py     # (placeholder)
-│   │   ├── refund_tool.py      # (placeholder)
-│   │   └── human_gate.py       # (placeholder)
+│   │   ├── __init__.py
+│   │   ├── support_tools.py    # check_order_status, apply_refund, send_goodwill_credit
+│   │   ├── order_lookup.py     # Structured order lookup with ownership validation
+│   │   ├── refund_tool.py      # Structured refund processing with validation
+│   │   └── human_gate.py       # Escalation ticket generation
 │   ├── rag/
-│   │   ├── policy_retriever.py # Policy RAG (InMemoryVectorStore)
-│   │   ├── vectorstore.py      # (placeholder)
-│   │   └── ingestion.py        # (placeholder)
+│   │   ├── __init__.py
+│   │   ├── policy_retriever.py # High-level policy retrieval interface
+│   │   ├── vectorstore.py      # ChromaDB vector store + embedding fallback chain
+│   │   └── ingestion.py        # Policy document ingestion pipeline
 │   └── governance/
+│       ├── __init__.py
 │       ├── audit.py            # log_event() → data/audit_log.json
-│       └── refusal.py          # (placeholder)
+│       └── refusal.py          # PII scan + compliance verification
 ├── tests/
-│   ├── test_agent.py           # LangGraph integration tests
+│   ├── __init__.py
+│   ├── conftest.py             # Shared pytest fixtures
+│   ├── test_agent.py           # LangGraph integration tests (8 cases)
 │   ├── test_support_tools.py   # Support tool unit tests
 │   ├── test_tools.py           # Mock order lookup tests
 │   ├── test_rag.py             # Policy retrieval tests
 │   ├── test_governance.py      # Audit logging tests
-│   └── test_api.py             # (placeholder)
+│   ├── test_api.py             # FastAPI endpoint tests
+│   └── test_e2e.py             # Playwright E2E browser tests (14 cases)
 └── data/
-    ├── mock_orders.py          # 5 fake orders + lookup_order()
-    ├── policies.txt            # 3 policies for RAG retrieval
+    ├── mock_orders.py          # 16 mock orders + lookup_order()
+    ├── policies.txt            # Flat text policies for RAG
     ├── orders/
-    │   └── mock_orders.json    # Legacy sample orders
-    └── policies/
-        ├── refund_policy.md
-        ├── shipping_policy.md
-        └── privacy_policy.md
+    │   └── mock_orders.json    # Legacy sample orders (JSON fallback)
+    ├── policies/
+    │   ├── refund_policy.md
+    │   ├── shipping_policy.md
+    │   ├── privacy_policy.md
+    │   ├── warranty_policy.md
+    │   ├── return_policy.md
+    │   ├── account_security_policy.md
+    │   ├── loyalty_policy.md
+    │   ├── complaint_policy.md
+    │   └── product_safety_policy.md
+    └── audit_log.json          # Runtime-generated audit trail
 ```
 
 ---
@@ -89,7 +109,14 @@ chmod +x setup.sh && ./setup.sh
 copy .env.example .env
 ```
 
-Edit `.env` and set your `OPENAI_API_KEY`.
+Edit `.env` and set your API keys:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_TOKEN` | Yes | GitHub PAT for LLM (GPT-4o-mini) + embedding fallback |
+| `GOOGLE_API_KEY` | No | Google Gemini embeddings (free tier, 1500 req/day) |
+| `OPENAI_API_KEY` | No | OpenRouter key for LLM/embedding fallback |
+| `CHROMA_PERSIST_DIR` | No | ChromaDB storage path (default: `./data/chroma_db`) |
 
 ### 3. Run tests
 
@@ -250,15 +277,40 @@ pytest eval_suite.py -v       # run as pytest
 
 Report fields per test: **Pass/Fail**, **latency_ms**, **token_usage** (mocked), **audit_log_snippet**.
 
-**Mock order scenarios:**
+**Mock order scenarios (16 orders):**
 
-| Order ID | Scenario |
-|----------|----------|
-| A4821 | Late delivery (5 days late) |
-| B9999 | High value ($500) |
-| C1234 | Normal shipped status |
-| D5678 | Processing |
-| E9012 | Cancelled |
+| Order ID | Customer | Status | Total | Scenario |
+|----------|----------|--------|-------|----------|
+| A4821 | cust_1001 | shipped | $89.99 | Late delivery (5 days) |
+| B9999 | cust_1002 | delivered | $500.00 | High value, approval required |
+| C1234 | cust_1003 | shipped | $34.50 | Normal shipped status |
+| D5678 | cust_1004 | processing | $120.00 | Still processing |
+| E9012 | cust_1005 | cancelled | $45.00 | Cancelled order |
+| F2345 | cust_1006 | delivered | $15.99 | Small delivered order |
+| G6789 | cust_1007 | delivered | $749.00 | Premium electronics |
+| H0123 | cust_1008 | shipped | $22.50 | Gift order |
+| I4567 | cust_1009 | processing | $999.99 | Very high value |
+| J8901 | cust_1010 | delivered | $8.50 | Small value (auto-refund eligible) |
+| K2345 | cust_1011 | shipped | $156.75 | International order |
+| L6789 | cust_1012 | delivered | $320.00 | Return requested |
+| M0123 | cust_1013 | cancelled | $67.80 | Partial refund |
+| N4567 | cust_1014 | processing | $445.00 | Bulk order |
+| O8901 | cust_1015 | delivered | $12.99 | Loyalty member |
+| P2345 | cust_1016 | shipped | $289.00 | Warranty claim |
+
+**Policy documents (9 policies):**
+
+| Policy | Description |
+|--------|-------------|
+| `refund_policy.md` | Refund eligibility, 30-day window, $500+ approval |
+| `shipping_policy.md` | Shipping options, tracking, lost packages |
+| `privacy_policy.md` | Data handling, PII protection, agent access limits |
+| `warranty_policy.md` | Warranty coverage, claim process |
+| `return_policy.md` | Return eligibility, conditions, timeframes |
+| `account_security_policy.md` | Account verification, fraud protection |
+| `loyalty_policy.md` | Loyalty program rules, rewards |
+| `complaint_policy.md` | Complaint handling, escalation |
+| `product_safety_policy.md` | Product safety, recalls, incident reporting |
 
 ---
 
@@ -276,7 +328,10 @@ Report fields per test: **Pass/Fail**, **latency_ms**, **token_usage** (mocked),
 
 ## Running Tests
 
+### Unit & Integration Tests
+
 ```powershell
+.\venv\Scripts\Activate.ps1
 pytest tests/ -v
 ```
 
@@ -287,21 +342,50 @@ Current coverage:
 | `test_agent.py` | LangGraph planner, human gate, tool executor, audit log |
 | `test_tools.py` | Mock order lookup |
 | `test_support_tools.py` | Support tools (refund limits, goodwill credit) |
-| `test_rag.py` | Policy retrieval |
-| `test_governance.py` | Audit file logging |
+| `test_rag.py` | Policy retrieval from ChromaDB |
+| `test_governance.py` | Audit logging + PII/compliance checks |
 | `test_api.py` | FastAPI `/chat`, `/approve`, `/get_audit_log` |
+
+### E2E Browser Tests (Playwright)
+
+```powershell
+# Install Playwright (one-time)
+.\venv\Scripts\python.exe -m pip install playwright pytest-playwright
+python -m playwright install chromium
+
+# Start Streamlit (separate terminal)
+streamlit run ui.py
+
+# Run E2E tests
+pytest tests/test_e2e.py -v
+```
+
+E2E test coverage:
+
+| Test class | Tests | What it covers |
+|------------|-------|----------------|
+| `TestPageLoad` | 5 | Page loads, header, metrics, workflow graph, sidebar agents |
+| `TestChatInput` | 2 | Chat input exists, can type message |
+| `TestOrderLookup` | 3 | Orders A4821, C1234, B9999 lookup via chat |
+| `TestRefundFlow` | 2 | Small ($5) and large ($300) refund requests |
+| `TestGeneralInquiry` | 1 | General greeting / conversation |
+| `TestDemoButtons` | 1 | All 5 demo buttons present |
 
 ---
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for the full list. Minimum required:
+See [`.env.example`](.env.example) for the full list:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API key for LLM calls |
-| `LANGCHAIN_API_KEY` | No | LangSmith tracing (optional) |
+| `GITHUB_TOKEN` | Yes | GitHub PAT for LLM (GPT-4o-mini via GitHub Models) + embedding fallback |
+| `OPENAI_API_KEY` | No | OpenRouter or OpenAI key for LLM/embedding fallback |
+| `GOOGLE_API_KEY` | No | Google Gemini embeddings (free tier, 1500 req/day) |
 | `CHROMA_PERSIST_DIR` | No | ChromaDB storage path (default: `./data/chroma_db`) |
+| `EMBEDDING_MODEL` | No | Embedding model name (default: `text-embedding-3-small`) |
+| `OPENAI_MODEL` | No | LLM model name (default: `gpt-4o-mini`) |
+| `AUDIT_LOG_PATH` | No | Audit log file path (default: `data/audit_log.json`) |
 
 ---
 
