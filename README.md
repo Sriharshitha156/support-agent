@@ -371,6 +371,28 @@ E2E test coverage:
 | `TestGeneralInquiry` | 1 | General greeting / conversation |
 | `TestDemoButtons` | 1 | All 5 demo buttons present |
 
+### 8-Dimension Evaluation Suite
+
+```powershell
+# Run all 54 eval tests across 8 dimensions
+pytest tests/test_eval_dimensions.py -v
+
+# Generate JSON report
+python -m tests.test_eval_dimensions
+# writes eval_dimensions_report.json
+```
+
+| # | Dimension | Tests | What it validates |
+|---|-----------|-------|-------------------|
+| 1 | Intent Classification Accuracy | 9 | Correct intent detection (order_status, refund, general, out_of_scope) |
+| 2 | Order Lookup Accuracy | 7 | Correct order details, missing orders, cancelled/processing status |
+| 3 | Refund Governance | 8 | Small auto-approved, large gated, threshold boundary, policy cited |
+| 4 | Policy RAG Retrieval | 5 | Policies retrieved for all query types, snippets logged |
+| 5 | Risk Detection & Escalation | 6 | Legal threats, high-value refunds, adversarial prompts detected |
+| 6 | Human-in-the-Loop (HITL) | 6 | Gate pauses for high-risk, not triggered for safe requests |
+| 7 | Out-of-Scope Refusal | 6 | Competitor comparisons refused, no tools executed, polite message |
+| 8 | Compliance & PII Protection | 7 | No credit cards leaked, compliance checks run, audit trail complete |
+
 ---
 
 ## Environment Variables

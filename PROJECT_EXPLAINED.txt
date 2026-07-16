@@ -675,6 +675,37 @@ When a customer sends a message, it flows through these stages:
     captures text from Streamlit's shadow DOM components that raw HTML
     page.content() cannot see.
 
+  tests/test_eval_dimensions.py
+    PURPOSE: 8-Dimension Evaluation Suite — 54 test cases.
+    DIMENSIONS:
+    1. Intent Classification Accuracy (9 tests)
+       - Validates correct intent detection for order_status, refund,
+         general, and out_of_scope queries
+    2. Order Lookup Accuracy (7 tests)
+       - Validates correct order details returned, missing orders handled,
+         cancelled/processing status shown
+    3. Refund Governance (8 tests)
+       - Small refunds auto-approved, large refunds gated, threshold
+         boundary tested, policy cited, confirmation IDs returned
+    4. Policy RAG Retrieval (5 tests)
+       - Policies retrieved for all query types, snippets recorded
+         in planner audit entries
+    5. Risk Detection & Escalation (6 tests)
+       - Legal threats, high-value refunds, adversarial prompts detected,
+         risk keywords captured, low-risk queries not escalated
+    6. Human-in-the-Loop (HITL) (6 tests)
+       - Gate pauses for high-risk, not triggered for safe requests,
+         refund blocked before approval, wait message produced
+    7. Out-of-Scope Refusal (6 tests)
+       - Competitor comparisons refused, audit logged, no tools executed,
+         polite message, no risk escalation
+    8. Compliance & PII Protection (7 tests)
+       - No credit cards leaked, compliance checks run, refund blocked
+         without approval, audit trail complete with timestamps
+    USAGE:
+      pytest tests/test_eval_dimensions.py -v
+      python -m tests.test_eval_dimensions  # writes eval_dimensions_report.json
+
 
 ================================================================================
 7. DATA FLOW DIAGRAM
@@ -806,6 +837,10 @@ Customer Message
 
   # Run evaluation suite
   python eval_suite.py
+
+  # Run 8-dimension evaluation (54 tests)
+  pytest tests/test_eval_dimensions.py -v
+  python -m tests.test_eval_dimensions  # writes eval_dimensions_report.json
 
   # API docs (when FastAPI is running)
   http://localhost:8000/docs
