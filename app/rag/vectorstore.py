@@ -15,10 +15,18 @@ import zlib
 from pathlib import Path
 from typing import Any, List, Dict
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
+
+try:
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+except ImportError:
+    GoogleGenerativeAIEmbeddings = None  # type: ignore[misc,assignment]
 
 # Custom stateless Feature Hashing Embeddings for testing/offline usage
 class HashingEmbeddings(Embeddings):
@@ -51,37 +59,69 @@ class HashingEmbeddings(Embeddings):
 
 
 def get_embeddings_model() -> Embeddings:
-    """Return OpenAIEmbeddings if API key (or GITHUB_TOKEN) is present and working, otherwise HashingEmbeddings fallback."""
-    g_token = os.getenv("GITHUB_TOKEN")
-    o_key = os.getenv("OPENAI_API_KEY")
-    
-    openai_key = None
-    if g_token and not g_token.startswith("gh-your-github-token"):
-        openai_key = g_token
-    elif o_key and not o_key.startswith("sk-your-openai-api-key"):
-        openai_key = o_key
-        
-    base_url = os.getenv("OPENAI_API_BASE")
-    
-    # Auto-detect GitHub Models endpoint if a GitHub PAT is used
-    if openai_key and (openai_key.startswith("ghp_") or openai_key.startswith("github_pat_") or g_token):
-        if not base_url:
-            base_url = "https://models.inference.ai.azure.com"
-            
-    if openai_key:
-        model_name = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    """Return best available embeddings model, falling back through providers to local HashingEmbeddings."""
+    model_name = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+    # Priority 1: Google Gemini (free tier: 1500 req/day)
+    google_key = os.getenv("GOOGLE_API_KEY")
+    if google_key and GoogleGenerativeAIEmbeddings is not None:
         try:
-            model = OpenAIEmbeddings(
-                openai_api_key=openai_key, 
-                model=model_name, 
-                openai_api_base=base_url
+            model = GoogleGenerativeAIEmbeddings(
+                model="models/gemini-embedding-001",
+                google_api_key=google_key,
             )
-            # Send a quick probe to verify key is valid and not out of quota
             model.embed_query("probe")
             return model
         except Exception as exc:
-            # Graceful fallback on rate limit/insufficient quota errors
-            print(f"Embeddings API verification failed (falling back): {exc}")
+            print(f"Embeddings API (Google Gemini) unavailable: {exc}")
+
+    # Priority 2: Explicit EMBEDDING_API_BASE (e.g. OpenRouter, custom provider)
+    embedding_base = os.getenv("EMBEDDING_API_BASE")
+    embedding_key = os.getenv("OPENAI_API_KEY")
+
+    if embedding_base and embedding_key and not embedding_key.startswith("sk-your-openai-api-key"):
+        try:
+            model = OpenAIEmbeddings(
+                openai_api_key=embedding_key,
+                model=model_name,
+                openai_api_base=embedding_base,
+            )
+            model.embed_query("probe")
+            return model
+        except Exception as exc:
+            print(f"Embeddings API ({embedding_base}) unavailable: {exc}")
+
+    # Priority 3: GITHUB_TOKEN → GitHub Models endpoint
+    g_token = os.getenv("GITHUB_TOKEN")
+    if g_token and not g_token.startswith("gh-your-github-token"):
+        base_url = os.getenv("OPENAI_API_BASE") or "https://models.inference.ai.azure.com"
+        try:
+            model = OpenAIEmbeddings(
+                openai_api_key=g_token,
+                model=model_name,
+                openai_api_base=base_url,
+            )
+            model.embed_query("probe")
+            return model
+        except Exception as exc:
+            print(f"Embeddings API (GitHub Models) unavailable: {exc}")
+
+    # Priority 4: OPENAI_API_KEY → default OpenAI endpoint
+    o_key = os.getenv("OPENAI_API_KEY")
+    if o_key and not o_key.startswith("sk-your-openai-api-key"):
+        base_url = os.getenv("OPENAI_API_BASE")
+        try:
+            model = OpenAIEmbeddings(
+                openai_api_key=o_key,
+                model=model_name,
+                openai_api_base=base_url,
+            )
+            model.embed_query("probe")
+            return model
+        except Exception as exc:
+            print(f"Embeddings API unavailable: {exc}")
+
+    print("No valid API key found for embeddings — using local HashingEmbeddings fallback.")
     return HashingEmbeddings()
 
 

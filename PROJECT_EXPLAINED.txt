@@ -1,0 +1,851 @@
+================================================================================
+       CUSTOMER SUPPORT RESOLUTION AGENT - COMPLETE PROJECT EXPLANATION
+================================================================================
+Author: Sriharshitha | Capstone Project 2026
+================================================================================
+
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+This is an AI-powered Customer Support Agent that can handle real customer
+service tasks autonomously — checking order statuses, processing refunds,
+retrieving company policies, escalating to human managers when needed, and
+blocking malicious inputs. Think of it as a smart chatbot for an e-commerce
+company that knows the company's policies and can take actions on behalf
+of the customer.
+
+The key innovation is "Human-in-the-Loop" governance: the agent can handle
+routine requests (like small refunds under $10) fully automatically, but
+for high-risk actions (like large refunds or legal threats), it pauses and
+asks a human manager to approve or reject the action before proceeding.
+
+
+================================================================================
+2. HOW IT WORKS - ARCHITECTURE & FLOW
+================================================================================
+
+The system has three main layers:
+
+  FRONTEND (Streamlit UI)
+         |
+         v
+  BACKEND (FastAPI API)
+         |
+         v
+  AGENT CORE (LangGraph State Machine)
+
+--- Agent Processing Pipeline ---
+
+When a customer sends a message, it flows through these stages:
+
+  STAGE 1: PREPROCESS (Risk Scanning)
+    - Scans the message for risk keywords: "sue", "lawyer", "legal",
+      "refund", "compensation"
+    - If it finds legal keywords OR the refund amount exceeds $10, it
+      flags requires_human_approval = True
+    - Extracts order ID (like A4821) and refund amount ($5, $300, etc.)
+    - Uses LLM (GPT-4o-mini) for structured risk analysis if available,
+      falls back to keyword matching if LLM is unavailable
+
+  STAGE 2: PLANNER (Intent Recognition)
+    - Determines what the customer wants:
+        * "order_status" - they want to check an order
+        * "refund" - they want money back
+        * "general" - general question
+        * "out_of_scope" - something we can't help with (competitor comparison)
+    - Retrieves relevant company policies from ChromaDB vector database
+    - Plans the next action: order_lookup, policy_check, refund, or refuse
+
+  STAGE 3: HUMAN GATE (Approval Check) [conditional]
+    - Only activated when requires_human_approval = True
+    - PAUSES the entire workflow using LangGraph's interrupt() mechanism
+    - Waits for a human manager to either APPROVE or REJECT
+    - If approved: continues to tool execution
+    - If rejected: ends with a polite refusal message
+
+  STAGE 4: TOOL EXECUTOR (Action Execution)
+    - Runs the actual tools based on the planned action:
+        * check_order_status() - looks up order in database
+        * apply_refund() - processes refund (only if approved or under $10)
+        * send_goodwill_credit() - issues store credit for late orders
+        * refuse_out_of_scope() - politely declines off-topic requests
+    - After tool execution, runs COMPLIANCE CHECK:
+        * PII scan (ensures no credit card numbers or other customers' data)
+        * Authorization check (ensures refund promises match approval status)
+
+  STAGE 5: RESPONSE
+    - The agent's response is sent back through the pipeline
+    - Every step is logged to the audit trail
+
+
+================================================================================
+3. TECH STACK & WHY EACH TECHNOLOGY WAS CHOSEN
+================================================================================
+
+--- Core Agent Framework ---
+
+  LangGraph (>=0.2.0)
+    WHY: Chosen because it provides a state-machine approach to building
+    AI agents. Unlike simple chain-based agents, LangGraph allows:
+    - Conditional routing (different paths based on risk level)
+    - Human-in-the-loop interrupts (pausing for approval)
+    - State persistence across sessions (MemorySaver checkpointer)
+    - Clear visualization of agent workflow
+    This is critical for a support agent that needs governance controls.
+
+  LangChain (>=0.3.0)
+    WHY: Provides the foundational abstractions for:
+    - Message handling (HumanMessage, AIMessage)
+    - Tool definitions (@tool decorator)
+    - LLM integration (ChatOpenAI)
+    - Document handling for RAG
+    LangGraph builds on top of LangChain, so they work together naturally.
+
+  LangChain-OpenAI (>=0.2.0)
+    WHY: OpenAI connector for LangChain. Used for:
+    - GPT-4o-mini for intent recognition and risk analysis
+    - Structured output parsing (AnalysisPlan, RiskScan models)
+    - Embedding generation for vector search
+
+--- API & Frontend ---
+
+  FastAPI (>=0.115.0)
+    WHY: High-performance Python web framework for the REST API.
+    - Provides /chat, /approve, /get_audit_log, /health endpoints
+    - Automatic OpenAPI documentation
+    - Pydantic validation for request/response models
+    - CORS middleware for cross-origin requests
+
+  Uvicorn (>=0.32.0)
+    WHY: ASGI server to run FastAPI. Fast, production-ready.
+
+  Streamlit (>=1.40.0)
+    WHY: Rapid UI prototyping framework for the dashboard.
+    - Single-file Python UI (ui.py) — no HTML/CSS/JS needed
+    - Session state management for multi-turn conversations
+    - Built-in widgets (buttons, text inputs, tabs, spinners)
+    - Custom CSS injection for the futuristic "AI Command Center" look
+    - Real-time workflow visualization with SVG path nodes
+
+--- Data & Validation ---
+
+  Pydantic (>=2.9.0)
+    WHY: Data validation and serialization.
+    - AgentState TypedDict for LangGraph state schema
+    - FastAPI request/response models (ChatRequest, ChatResponse)
+    - Structured output models (AnalysisPlan, RiskScan)
+    - Ensures type safety across the entire system
+
+  python-dotenv (>=1.0.0)
+    WHY: Loads environment variables from .env file.
+    - API keys (OPENAI_API_KEY, GOOGLE_API_KEY, GITHUB_TOKEN)
+    - Configuration (CHROMA_PERSIST_DIR, EMBEDDING_MODEL)
+    - Keeps secrets out of code
+
+--- RAG / Vector Store ---
+
+  ChromaDB (>=0.5.0)
+    WHY: Lightweight vector database for policy document retrieval.
+    - Stores embedded policy documents (refund, shipping, privacy)
+    - Enables similarity search for relevant policies
+    - Persistent storage (./data/chroma_db/)
+    - Self-healing: auto-recreates if database is corrupted
+
+  LangChain-Chroma (>=0.1.0)
+    WHY: LangChain integration for ChromaDB.
+    - Wraps ChromaDB with LangChain's vectorstore interface
+    - Handles embedding function management
+
+  LangChain-Google-Genai (>=2.0.0)
+    WHY: Google Gemini embeddings (free tier: 1500 req/day).
+    - Primary embedding provider (gemini-embedding-001)
+    - Falls back to OpenAI, GitHub Models, or local HashingEmbeddings
+
+--- Testing ---
+
+  Pytest (>=8.3.0)
+    WHY: Python testing framework.
+    - Unit tests for tools, RAG, governance
+    - Integration tests for the full agent pipeline
+    - Evaluation suite (eval_suite.py) with 5 capstone scenarios
+
+  httpx (>=0.27.0)
+    WHY: Async HTTP client for testing FastAPI endpoints.
+
+  pytest-asyncio (>=0.24.0)
+    WHY: Async test support for testing async endpoints.
+
+
+================================================================================
+4. MODELS & AI COMPONENTS USED
+================================================================================
+
+--- LLM Models ---
+
+  GPT-4o-mini (OpenAI / GitHub Models)
+    PURPOSE: Agent reasoning and structured output
+    - Risk analysis (structured RiskScan output)
+    - Intent classification (structured AnalysisPlan output)
+    - Fallback: regex/keyword matching if LLM unavailable
+    - Temperature: 0.0 (deterministic)
+    - Max retries: 0 (fail fast)
+
+  --- Embedding Models ---
+
+  Google Gemini gemini-embedding-001 (Primary)
+    - 3072-dimensional embeddings
+    - Free tier: 1500 requests/day
+    - Used for policy document vectorization
+
+  OpenAI text-embedding-3-small (Fallback)
+    - Standard OpenAI embeddings
+    - Used when Gemini is unavailable
+
+  GitHub Models text-embedding-3-small (Fallback)
+    - Free via GitHub PAT
+    - Used when OpenAI key unavailable
+
+  Local HashingEmbeddings (Offline Fallback)
+    - 128-dimensional feature hashing
+    - Adler32 hash for word-level embeddings
+    - L2 normalized
+    - Used when ALL API providers are unreachable
+    - WARNING: Not compatible with API-generated embeddings
+
+--- Structured Output Models (Pydantic) ---
+
+  RiskScan:
+    - legal_threat: bool
+    - detected_keywords: list[str]
+    - refund_requested: bool
+
+  AnalysisPlan:
+    - intent: str (order_status/refund/general/out_of_scope)
+    - order_id: str
+    - refund_amount: float
+
+
+================================================================================
+5. KEY ELEMENTS & CONCEPTS CONSIDERED
+================================================================================
+
+--- Governance & Safety ---
+
+  1. HUMAN-IN-THE-LOOP (HITL)
+     - High-value refunds (>$10) require human approval
+     - Legal threats automatically escalate
+     - Uses LangGraph's interrupt() for pausing/resuming
+     - Manager can approve or reject via UI buttons
+
+  2. RISK SCANNING
+     - Keyword-based detection: sue, lawyer, legal, refund, compensation
+     - LLM-enhanced structured analysis when available
+     - Risk levels: LOW, MEDIUM, HIGH, CRITICAL
+     - Automatic escalation for CRITICAL risk
+
+  3. COMPLIANCE & PII PROTECTION
+     - Scans responses for credit card numbers (13-16 digits)
+     - Blocks disclosure of other customers' order IDs
+     - Prevents unauthorized refund promises
+     - Modified responses replace non-compliant content
+
+  4. AUDIT TRAIL
+     - Every step logged to data/audit_log.json
+     - Timestamps, risk levels, actions, details
+     - Viewable in UI's Audit Log tab
+     - Retained for compliance and debugging
+
+--- RAG (Retrieval-Augmented Generation) ---
+
+  1. POLICY RETRIEVAL
+     - Company policies stored in ChromaDB vector database
+     - Similarity search finds relevant policy snippets
+     - Policies: refund_policy.md, shipping_policy.md, privacy_policy.md
+     - Self-healing: auto-recreates index if empty
+
+  2. INGESTION PIPELINE
+     - Loads markdown files from data/policies/
+     - Loads flat text from data/policies.txt
+     - Chunks using MarkdownTextSplitter (300 chars, 30 overlap)
+     - Embeds and stores in ChromaDB
+
+  3. EMBEDDING FALLBACK CHAIN
+     Priority 1: Google Gemini (free tier)
+     Priority 2: OpenAI/OpenRouter API
+     Priority 3: GitHub Models (free via PAT)
+     Priority 4: OpenAI direct
+     Fallback: Local HashingEmbeddings (128-dim)
+
+--- State Management ---
+
+  AgentState (TypedDict):
+    - messages: list[BaseMessage] — conversation history
+    - order_id: str — extracted order ID
+    - refund_amount: float — extracted refund amount
+    - requires_human_approval: bool — governance flag
+    - audit_log: list[dict] — step-by-step audit trail
+    - gate_response: dict — human gate status
+    - approval_status: str — approved/rejected/pending
+    - detected_risk_keywords: list[str] — risk scan results
+
+--- Mock Data ---
+
+  16 Simulated Orders (data/mock_orders.py):
+    A4821 — Late delivery (5 days), $89.99, refund eligible
+    B9999 — High value ($500), manager approval required
+    C1234 — Normal shipped, $34.50, refund eligible
+    D5678 — Processing, $120.00, refund eligible
+    E9012 — Cancelled, $45.00, not refund eligible
+    F2345 — Small delivered, $15.99
+    G6789 — Premium electronics, delivered, $749.00
+    H0123 — Gift order, shipped, $22.50
+    I4567 — Very high value, processing, $999.99
+    J8901 — Small value, delivered, $8.50 (auto-refund eligible)
+    K2345 — International order, shipped, $156.75
+    L6789 — Return requested, delivered, $320.00
+    M0123 — Partial refund, cancelled, $67.80
+    N4567 — Bulk order, processing, $445.00
+    O8901 — Loyalty member, delivered, $12.99
+    P2345 — Warranty claim, shipped, $289.00
+
+  Legacy JSON orders (data/orders/mock_orders.json):
+    2 orders in legacy format (ORD-XXXX), used as fallback by order_lookup.py
+
+--- Policy Documents (9 policies in data/policies/) ---
+
+    refund_policy.md      — Refund eligibility, 30-day window, $500+ needs approval
+    shipping_policy.md    — Shipping options, tracking, lost/damaged packages
+    privacy_policy.md     — Data handling, PII protection, agent access limits
+    warranty_policy.md    — Warranty coverage, claim process, exclusions
+    return_policy.md      — Return eligibility, conditions, timeframes
+    account_security_policy.md — Account verification, fraud protection
+    loyalty_policy.md     — Loyalty program rules, rewards, tiers
+    complaint_policy.md   — Complaint handling, escalation procedures
+    product_safety_policy.md — Product safety, recalls, incident reporting
+
+--- Evaluation Scenarios ---
+
+  1. Happy Path: Order status query → auto-respond with policy citation
+  2. Small Refund: $5 refund → auto-approved under $10 threshold
+  3. Large Refund: $300 refund → human gate triggered, RISK_DETECTED logged
+  4. Out of Scope: Competitor comparison → politely refused
+  5. Adversarial: Prompt injection attempt → blocked and escalated
+
+
+================================================================================
+6. FILE-BY-FILE EXPLANATION
+================================================================================
+
+--- Root Level Files ---
+
+  app.py
+    PURPOSE: FastAPI entry point. Simply re-exports the app from app/main.py.
+    WHY EXISTS: Python naming conflict — can't have a file and folder both
+    named "app" at the same level. This file resolves the import.
+
+  ui.py (2075 lines)
+    PURPOSE: Streamlit frontend — the "AI Operations Command Center" dashboard.
+    WHAT IT DOES:
+    - Renders a futuristic dark-theme UI with glassmorphic cards
+    - Shows real-time workflow visualization (SVG path nodes)
+    - Displays agent metrics (resolutions, latency, cost savings)
+    - Has 5 quick demo buttons for each scenario
+    - Custom input field for free-form customer messages
+    - Tabs for: Audit Log, Reasoning Trace, System Logs, RAG, Governance
+    - Human approval dialog (approve/reject buttons)
+    - Sidebar with live supervisor agent statuses
+    - Session state management for multi-turn conversations
+    KEY FUNCTIONS:
+    - _run_pipeline_simulation() — orchestrates the visual pipeline stages
+    - get_scenario_data() — maps user input to demo scenarios
+    - render_workflow_graph() — draws the SVG workflow visualization
+    - render_sidebar_agents() — shows supervisor agent statuses
+
+  eval_suite.py
+    PURPOSE: Evaluation suite with 5 capstone test scenarios.
+    WHAT IT DOES:
+    - Runs each scenario through the full agent pipeline
+    - Validates expected behaviors (risk detection, policy citation, etc.)
+    - Measures latency and token usage
+    - Writes evaluation_report.json with pass/fail results
+    - Also runnable as pytest tests
+
+  requirements.txt
+    PURPOSE: Lists all Python dependencies with minimum versions.
+
+  pytest.ini
+    PURPOSE: Pytest configuration (sets pythonpath to project root).
+
+  setup.ps1 / setup.sh
+    PURPOSE: Virtual environment setup scripts (PowerShell / Bash).
+
+  .env.example
+    PURPOSE: Template for environment variables. Copy to .env and fill in.
+
+  .gitignore
+    PURPOSE: Excludes venv/, .env, __pycache__, data/chroma_db from git.
+
+  README.md
+    PURPOSE: Comprehensive project documentation with setup instructions.
+
+  PROJECT_OVERVIEW.md
+    PURPOSE: Brief project overview document.
+
+--- app/ Package (Core Application) ---
+
+  app/__init__.py
+    PURPOSE: Makes app/ a Python package. Empty file.
+
+  app/main.py
+    PURPOSE: FastAPI application with all API endpoints.
+    ENDPOINTS:
+    - POST /chat — Send customer message, get agent response
+    - POST /approve — Resume paused human gate with decision
+    - GET /get_audit_log — Last 10 audit events
+    - GET /health — Liveness check
+    PURPOSE: Provides a REST API for programmatic access to the agent.
+    WHY: Enables integration with other systems, mobile apps, etc.
+
+--- app/agent/ Package (LangGraph Agent Core) ---
+
+  app/agent/__init__.py
+    PURPOSE: Package init. Imports and re-exports key functions.
+
+  app/agent/state.py
+    PURPOSE: Defines AgentState — the TypedDict schema for LangGraph state.
+    FIELDS:
+    - messages: Annotated[list[BaseMessage], add_messages] — conversation
+    - order_id: str — extracted order ID
+    - refund_amount: float — extracted refund amount
+    - requires_human_approval: bool — governance flag
+    - audit_log: list[dict] — step-by-step audit trail
+    - gate_response: NotRequired[dict] — human gate status
+    - approval_status: NotRequired[str] — approved/rejected/pending
+    - detected_risk_keywords: NotRequired[list[str]] — risk scan results
+    WHY: TypedDict ensures type safety across all graph nodes.
+
+  app/agent/graph.py (193 lines)
+    PURPOSE: LangGraph graph definition, compilation, and helper functions.
+    KEY COMPONENTS:
+    - build_graph() — Compiles the StateGraph with 4 nodes:
+        preprocess → planner → [human_gate | tool_executor] → END
+    - graph — The compiled graph (singleton)
+    - invoke_agent() — Runs graph for a single user turn
+    - resume_human_gate() — Resumes paused graph with approve/reject
+    - resume_agent() — Backward-compatible resume helper
+    - format_agent_result() — Normalizes state into API/UI payload
+    - route_after_planner() — Decides: human_gate, tool_executor, or END
+    - route_after_human_gate() — Decides: tool_executor or END
+    WHY: Central orchestration point. All agent logic flows through here.
+
+  app/agent/nodes.py (598 lines)
+    PURPOSE: All LangGraph node implementations — the actual agent logic.
+    NODES:
+    - preprocess_node() — Risk scanning, keyword detection, escalation
+    - planner_node() — Intent classification, policy retrieval, action planning
+    - human_gate_node() — Pauses workflow, waits for manager decision
+    - tool_executor_node() — Runs tools (order lookup, refund, etc.)
+    - approve_human_action() — Processes approve/reject decisions
+    HELPER FUNCTIONS:
+    - _detect_intent() — Regex-based intent classification
+    - _extract_order_id() — Extracts order IDs like A4821 from text
+    - _extract_refund_amount() — Extracts dollar amounts from text
+    - _scan_risk_keywords() — Finds risk keywords in text
+    - _get_llm() — Initializes LLM with fallback chain
+    - _log_step() — Creates audit log entries
+    CONSTANTS:
+    - RISK_SCAN_KEYWORDS, LEGAL_KEYWORDS, REFUND_REQUEST_KEYWORDS
+    - ORDER_STATUS_KEYWORDS, OUT_OF_SCOPE_KEYWORDS
+    - REFUND_THRESHOLD_USD ($10)
+    WHY: Contains all the intelligence of the agent.
+
+--- app/tools/ Package (Support Tools) ---
+
+  app/tools/__init__.py
+    PURPOSE: Package init.
+
+  app/tools/support_tools.py (86 lines)
+    PURPOSE: Core support tools used by the tool executor.
+    TOOLS:
+    - check_order_status(order_id) — Looks up order, returns status message
+    - apply_refund(order_id, amount) — Processes refund (safety: <= $10 only)
+    - send_goodwill_credit(amount) — Issues mock goodwill credit
+    WHY: These are the actual tools the agent calls to take actions.
+
+  app/tools/order_lookup.py (86 lines)
+    PURPOSE: Structured order lookup tool with ownership verification.
+    FUNCTION: lookup_order_details(order_id, customer_id)
+    - Queries data/orders/mock_orders.json
+    - Falls back to data/mock_orders.py in-memory DB
+    - Verifies customer ownership of the order
+    - Returns order details or raises errors
+    WHY: Structured LangChain tool for more complex order queries.
+
+  app/tools/refund_tool.py (103 lines)
+    PURPOSE: Structured refund processing tool with full validation.
+    FUNCTION: process_order_refund(order_id, customer_id, amount, reason)
+    - Verifies order ownership
+    - Checks refund window (30 days from delivery)
+    - Validates against $10 auto-approval limit
+    - Checks refund eligibility flag
+    - Returns confirmation ID or rejection reason
+    WHY: Comprehensive refund validation that mimics real-world logic.
+
+  app/tools/human_gate.py (48 lines)
+    PURPOSE: Human escalation simulation tool.
+    FUNCTION: escalate_to_human(reason, order_id)
+    - Generates unique ticket ID (TKT-XXXXXXXX)
+    - Logs escalation event to audit trail
+    - Returns ticket reference for customer
+    WHY: Simulates what would be a real ticketing system integration.
+
+--- app/rag/ Package (Retrieval-Augmented Generation) ---
+
+  app/rag/__init__.py
+    PURPOSE: Package init.
+
+  app/rag/vectorstore.py (172 lines)
+    PURPOSE: ChromaDB vector store setup and retrieval interface.
+    KEY COMPONENTS:
+    - HashingEmbeddings — Local offline embedding fallback (128-dim)
+    - get_embeddings_model() — Embedding provider fallback chain
+    - get_chroma_vectorstore() — Returns persistent Chroma collection
+    - retrieve_policies_from_chroma() — Similarity search with filters
+    EMBEDDING FALLBACK ORDER:
+    1. Google Gemini (gemini-embedding-001)
+    2. OpenAI/OpenRouter API
+    3. GitHub Models
+    4. OpenAI direct
+    5. Local HashingEmbeddings (offline fallback)
+    WHY: Provides the vector search backbone for policy retrieval.
+
+  app/rag/policy_retriever.py (46 lines)
+    PURPOSE: High-level policy retrieval interface.
+    FUNCTIONS:
+    - retrieve_policy(query, k=2) — Returns list of {snippet, score, metadata}
+    - retrieve_policy_text(query, k=2) — Returns joined policy text string
+    SELF-HEALING: If ChromaDB is empty, auto-runs ingestion pipeline.
+    WHY: Simple interface used by planner and tool executor nodes.
+
+  app/rag/ingestion.py (100 lines)
+    PURPOSE: Policy document ingestion pipeline.
+    WHAT IT DOES:
+    1. Loads markdown files from data/policies/ (refund, shipping, privacy)
+    2. Loads flat text from data/policies.txt
+    3. Chunks documents using MarkdownTextSplitter (300 chars, 30 overlap)
+    4. Embeds and stores in ChromaDB
+    5. Clears old collection before re-ingesting
+    WHY: One-time setup to populate the vector database with policies.
+
+--- app/governance/ Package (Safety & Compliance) ---
+
+  app/governance/__init__.py
+    PURPOSE: Package init.
+
+  app/governance/audit.py (64 lines)
+    PURPOSE: Structured audit logging to a local JSON file.
+    FUNCTIONS:
+    - log_event(event_type, details, risk_level) — Appends to audit_log.json
+    - get_recent_audit_logs(limit) — Returns last N audit events
+    FILE: data/audit_log.json
+    FORMAT: [{timestamp, event_type, details, risk_level}, ...]
+    WHY: Every agent action is logged for compliance and debugging.
+
+  app/governance/refusal.py (95 lines)
+    PURPOSE: Response compliance and PII protection.
+    FUNCTIONS:
+    - check_pii_exposure(text, allowed_order_id) — Detects PII leaks
+    - verify_compliance(response_text, state) — Full compliance audit
+    CHECKS:
+    1. PII exposure: credit card numbers, other customers' order IDs
+    2. Unauthorized refund promises: agent can't promise refunds before
+       approval or above the $10 limit
+    RETURNS: {compliant, action, reason, modified_text}
+    WHY: Last line of defense before response reaches customer.
+
+--- data/ Package (Mock Data & Policies) ---
+
+  data/mock_orders.py (83 lines)
+    PURPOSE: In-memory mock order database with 16 test orders.
+    ORDERS:
+    - A4821: Late delivery (5 days), $89.99, refund eligible
+    - B9999: High value ($500), manager approval required
+    - C1234: Normal shipped, $34.50, refund eligible
+    - D5678: Processing, $120.00, refund eligible
+    - E9012: Cancelled, $45.00, not refund eligible
+    - F2345 through P2345: 11 additional scenarios (gift, premium, bulk,
+      international, loyalty, warranty, return, etc.)
+    FUNCTIONS:
+    - lookup_order(order_id) — Returns order or raises OrderNotFoundError
+    WHY: Simulates a real order database for testing.
+
+  data/policies/refund_policy.md
+    CONTENT: Refund eligibility (30-day window, $500+ needs approval),
+    process steps, exceptions (defective items, lost shipments).
+
+  data/policies/shipping_policy.md
+    CONTENT: Standard/free shipping rules, express shipping ($14.99),
+    tracking info, lost/damaged package procedures.
+
+  data/policies/privacy_policy.md
+    CONTENT: What the agent can access, what it must NOT disclose
+    (PII, card numbers, other customers' data), data retention rules.
+
+  data/policies/warranty_policy.md
+    CONTENT: Warranty coverage periods, claim process, exclusions.
+
+  data/policies/return_policy.md
+    CONTENT: Return eligibility, condition requirements, timeframes.
+
+  data/policies/account_security_policy.md
+    CONTENT: Account verification, fraud protection procedures.
+
+  data/policies/loyalty_policy.md
+    CONTENT: Loyalty program rules, reward tiers, redemption.
+
+  data/policies/complaint_policy.md
+    CONTENT: Complaint handling process, escalation procedures.
+
+  data/policies/product_safety_policy.md
+    CONTENT: Product safety guidelines, recall procedures, incident reporting.
+
+  data/policies.txt (if exists)
+    CONTENT: Flat text policies for additional RAG context.
+
+  data/orders/mock_orders.json
+    CONTENT: JSON format of mock orders (used by order_lookup.py).
+
+  data/audit_log.json
+    CONTENT: Runtime-generated audit trail. Created/updated by audit.py.
+
+  data/chroma_db/
+    CONTENT: ChromaDB persistent storage. Auto-created during ingestion.
+
+--- tests/ Package (Test Suite) ---
+
+  tests/__init__.py
+    PURPOSE: Package init.
+
+  tests/conftest.py
+    PURPOSE: Pytest fixtures shared across test files.
+
+  tests/test_agent.py (179 lines)
+    PURPOSE: LangGraph integration tests — 8 test cases.
+    TESTS:
+    - test_order_status_runs_lookup_tool: Verifies order lookup flow
+    - test_small_refund_runs_policy_and_refund: Verifies auto-refund
+    - test_large_refund_triggers_human_gate: Verifies HITL escalation
+    - test_legal_keywords_trigger_human_gate: Verifies legal threat handling
+    - test_reject_ends_with_polite_refusal: Verifies rejection flow
+    - test_apply_refund_not_called_when_human_approval_required: Safety check
+    - test_approve_human_action_helper: Tests approval helper function
+    - test_audit_log_records_every_step: Verifies complete audit trail
+    - test_late_order_lookup_mentions_delay: Verifies late order response
+
+  tests/test_support_tools.py
+    PURPOSE: Unit tests for support_tools.py functions.
+
+  tests/test_tools.py
+    PURPOSE: Unit tests for order_lookup.py (mock order queries).
+
+  tests/test_rag.py
+    PURPOSE: Unit tests for policy retrieval (ChromaDB queries).
+
+  tests/test_governance.py
+    PURPOSE: Unit tests for audit logging and compliance checks.
+
+  tests/test_api.py
+    PURPOSE: Integration tests for FastAPI endpoints.
+
+  tests/test_e2e.py
+    PURPOSE: Playwright E2E browser tests — 14 test cases.
+    TESTS:
+    - TestPageLoad (5): Page loads, header visible, metrics visible,
+      workflow graph visible, sidebar agents visible
+    - TestChatInput (2): Chat input exists, can type message
+    - TestOrderLookup (3): Orders A4821, C1234, B9999 via chat input
+    - TestRefundFlow (2): Small ($5) and large ($300) refund requests
+    - TestGeneralInquiry (1): General greeting
+    - TestDemoButtons (1): All 5 demo buttons present
+    REQUIRES: Streamlit running on localhost:8501, Playwright + Chromium
+    HOW IT WORKS: Uses visible_text() helper to read Streamlit's rendered
+    content from [data-testid="stMarkdownContainer"] locators, which
+    captures text from Streamlit's shadow DOM components that raw HTML
+    page.content() cannot see.
+
+  tests/test_eval_dimensions.py
+    PURPOSE: 8-Dimension Evaluation Suite — 54 test cases.
+    DIMENSIONS:
+    1. Intent Classification Accuracy (9 tests)
+       - Validates correct intent detection for order_status, refund,
+         general, and out_of_scope queries
+    2. Order Lookup Accuracy (7 tests)
+       - Validates correct order details returned, missing orders handled,
+         cancelled/processing status shown
+    3. Refund Governance (8 tests)
+       - Small refunds auto-approved, large refunds gated, threshold
+         boundary tested, policy cited, confirmation IDs returned
+    4. Policy RAG Retrieval (5 tests)
+       - Policies retrieved for all query types, snippets recorded
+         in planner audit entries
+    5. Risk Detection & Escalation (6 tests)
+       - Legal threats, high-value refunds, adversarial prompts detected,
+         risk keywords captured, low-risk queries not escalated
+    6. Human-in-the-Loop (HITL) (6 tests)
+       - Gate pauses for high-risk, not triggered for safe requests,
+         refund blocked before approval, wait message produced
+    7. Out-of-Scope Refusal (6 tests)
+       - Competitor comparisons refused, audit logged, no tools executed,
+         polite message, no risk escalation
+    8. Compliance & PII Protection (7 tests)
+       - No credit cards leaked, compliance checks run, refund blocked
+         without approval, audit trail complete with timestamps
+    USAGE:
+      pytest tests/test_eval_dimensions.py -v
+      python -m tests.test_eval_dimensions  # writes eval_dimensions_report.json
+
+
+================================================================================
+7. DATA FLOW DIAGRAM
+================================================================================
+
+Customer Message
+       |
+       v
+  [PREPROCESS NODE]
+  - Scan risk keywords
+  - Extract order_id, refund_amount
+  - Set requires_human_approval if needed
+       |
+       v
+  [PLANNER NODE]
+  - Classify intent (order_status/refund/general/out_of_scope)
+  - Retrieve relevant policies from ChromaDB
+  - Plan next action
+       |
+       +-- requires_human_approval = True? --+
+       |                                     |
+       v                                     v
+  [TOOL EXECUTOR]                    [HUMAN GATE NODE]
+  - check_order_status()             - interrupt() → PAUSE
+  - apply_refund()                   - Wait for manager
+  - send_goodwill_credit()           - APPROVE → continue
+  - refuse_out_of_scope()            - REJECT → polite refusal
+       |                                     |
+       v                                     v
+  [COMPLIANCE CHECK]                  [APPROVE/REJECT]
+  - PII scan                         - Process decision
+  - Authorization check              - Resume tool_executor
+       |
+       v
+  [AUDIT LOG]
+  - Every step logged to JSON
+       |
+       v
+  [RESPONSE]
+  - Formatted response to customer
+  - Displayed in UI / returned via API
+
+
+================================================================================
+8. KEY DESIGN DECISIONS
+================================================================================
+
+  1. WHY LangGraph over simple LangChain chains?
+     -> Need conditional routing, human-in-the-loop, and state persistence.
+
+  2. WHY $10 auto-refund threshold?
+     -> Balances customer satisfaction (fast small refunds) with financial
+        safety (large refunds need human oversight).
+
+  3. WHY ChromaDB over Pinecone/Weaviate?
+     -> Lightweight, local-first, no cloud dependency. Perfect for a
+        capstone project and demo.
+
+  4. WHY fallback chain for embeddings?
+     -> Ensures the system works even without API keys (offline mode).
+        Different users may have different API access levels.
+
+  5. WHY both FastAPI AND Streamlit?
+     -> FastAPI provides a clean REST API for programmatic access.
+        Streamlit provides the visual demo dashboard. They complement
+        each other for different use cases.
+
+  6. WHY mock data instead of a real database?
+     -> Simplifies setup and demo. No database server needed.
+        Easy to understand and modify for testing.
+
+  7. WHY structured output (Pydantic models) for LLM?
+     -> Ensures the LLM returns consistent, parseable responses.
+        Reduces errors from free-form text generation.
+
+  8. WHY audit trail at every step?
+     -> Enterprise requirement. Enables debugging, compliance auditing,
+        and demonstration of agent decision-making process.
+
+  9. WHY Playwright E2E tests?
+     -> Verifies the full user experience in a real browser.
+        Catches UI rendering issues that unit tests miss.
+        Streamlit's shadow DOM requires special handling via
+        [data-testid="stMarkdownContainer"] locators.
+
+
+================================================================================
+9. ENVIRONMENT VARIABLES
+================================================================================
+
+  REQUIRED:
+    GITHUB_TOKEN — GitHub PAT for LLM (GPT-4o-mini via GitHub Models) and
+                   embedding fallback
+
+  OPTIONAL (free alternatives):
+    OPENAI_API_KEY — OpenRouter or OpenAI key for LLM/embedding fallback
+    GOOGLE_API_KEY — Free Gemini embeddings (1500 req/day)
+
+  CONFIGURATION:
+    CHROMA_PERSIST_DIR — ChromaDB storage path (default: ./data/chroma_db)
+    EMBEDDING_MODEL — Embedding model name (default: text-embedding-3-small)
+    OPENAI_MODEL — LLM model name (default: gpt-4o-mini)
+    AUDIT_LOG_PATH — Audit log file path (default: data/audit_log.json)
+
+
+================================================================================
+10. QUICK START COMMANDS
+================================================================================
+
+  # Setup
+  git clone https://github.com/Sriharshitha156/support-agent.git
+  cd support-agent
+  .\setup.ps1
+  copy .env.example .env    # Edit with your API keys
+
+  # Run tests
+  .\venv\Scripts\Activate.ps1
+  pytest tests/ -v
+
+  # Run E2E browser tests (requires Streamlit running)
+  streamlit run ui.py    # in separate terminal
+  pytest tests/test_e2e.py -v
+
+  # Run Streamlit UI (recommended for demo)
+  streamlit run ui.py
+
+  # Run FastAPI backend (for API access)
+  uvicorn app.main:app --reload
+
+  # Run evaluation suite
+  python eval_suite.py
+
+  # Run 8-dimension evaluation (54 tests)
+  pytest tests/test_eval_dimensions.py -v
+  python -m tests.test_eval_dimensions  # writes eval_dimensions_report.json
+
+  # API docs (when FastAPI is running)
+  http://localhost:8000/docs
+
+
+================================================================================
+                         END OF PROJECT EXPLANATION
+================================================================================

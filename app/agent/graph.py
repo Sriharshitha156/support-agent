@@ -55,6 +55,7 @@ def route_after_planner(state: AgentState) -> str:
         "policy_check",
         "refund",
         "refuse_out_of_scope",
+        "general_inquiry",
     ):
         return "tool_executor"
     return END
@@ -71,6 +72,7 @@ def route_after_human_gate(state: AgentState) -> str:
         "policy_check",
         "refund",
         "refuse_out_of_scope",
+        "general_inquiry",
     ):
         return "tool_executor"
     return END

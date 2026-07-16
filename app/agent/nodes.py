@@ -29,7 +29,7 @@ from data.mock_orders import OrderNotFoundError
 # Constants
 # ---------------------------------------------------------------------------
 
-PlannedAction = Literal["none", "order_lookup", "policy_check", "refund", "refuse_out_of_scope"]
+PlannedAction = Literal["none", "order_lookup", "policy_check", "refund", "refuse_out_of_scope", "general_inquiry"]
 RISK_SCAN_KEYWORDS = ("sue", "lawyer", "legal", "refund", "compensation")
 LEGAL_KEYWORDS = ("sue", "lawyer", "legal")
 REFUND_REQUEST_KEYWORDS = ("refund", "return", "compensation")
@@ -341,6 +341,9 @@ def planner_node(state: AgentState) -> dict:
         if requires_human_approval and not gate_response:
             gate_response = _waiting_approval_payload()
             approval_reason = gate_response["reason"]
+    elif intent == "general":
+        planned_action = "general_inquiry"
+        policy_snippets = retrieve_policy(user_text)
 
     audit_log = _log_step(
         state.get("audit_log", []),
@@ -484,15 +487,42 @@ def tool_executor_node(state: AgentState) -> dict:
 
     try:
         if planned_action == "order_lookup":
-            policy_text = retrieve_policy_text(user_text or f"order status {order_id}")
             tool_result = check_order_status(order_id)
-            response_message = f"{tool_result['message']}\n\nRelevant policy:\n{policy_text}"
+            order = tool_result["order"]
+            items_list = ", ".join(
+                f"{item['sku']} (x{item['qty']}) - ${item['price_usd']:.2f}"
+                for item in order.get("items", [])
+            )
+            response_message = (
+                f"Here are the details for order {order_id}:\n\n"
+                f"Status: {order['status'].upper()}\n"
+                f"Customer: {order['customer_id']}\n"
+                f"Total: ${order['total_usd']:.2f}\n"
+                f"Items: {items_list}\n"
+            )
+            if order.get("promised_delivery"):
+                response_message += f"Promised Delivery: {order['promised_delivery']}\n"
+            if order.get("actual_delivery"):
+                response_message += f"Actual Delivery: {order['actual_delivery']}\n"
+            if order.get("days_late", 0) > 0:
+                response_message += f"Delay: {order['days_late']} days late\n"
+            response_message += f"Notes: {order['notes']}"
             audit_action = "order_lookup"
             log_event(
                 "policy_retrieval",
                 {"step": "tool_executor", "order_id": order_id, "context": "order_status"},
                 "low",
             )
+
+        elif planned_action == "general_inquiry":
+            policy_text = retrieve_policy_text(user_text)
+            response_message = (
+                f"I'm an AI customer support assistant. I can help with order status, "
+                f"refunds, returns, and company policies.\n\n"
+                f"Regarding your question: {policy_text}"
+            )
+            tool_result = {"status": "general_inquiry", "policy_context": policy_text}
+            audit_action = "general_inquiry"
 
         elif planned_action == "refuse_out_of_scope":
             response_message = (
